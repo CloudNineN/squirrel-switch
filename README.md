@@ -18,23 +18,23 @@ Local multi-account switcher for AI developer tools. Squirrel Switch currently f
 
 ### Codex Accounts
 
-![Codex account overview](docs/screenshots/codex-accounts.png)
+![Codex account overview](assets/screenshots/codex-accounts.png)
 
 ### Add A Codex Account
 
-![Add a Codex account](docs/screenshots/add-codex-account.png)
+![Add a Codex account](assets/screenshots/add-codex-account.png)
 
 ### Scheduled Refresh
 
-![Scheduled account refresh](docs/screenshots/scheduled-refresh.png)
+![Scheduled account refresh](assets/screenshots/scheduled-refresh.png)
 
 ### Claude Code Profiles
 
-![Claude Code provider profiles](docs/screenshots/claude-code-profiles.png)
+![Claude Code provider profiles](assets/screenshots/claude-code-profiles.png)
 
 ### Prompt Management
 
-![Global prompt management](docs/screenshots/prompt-management.png)
+![Global prompt management](assets/screenshots/prompt-management.png)
 
 ## Install And Run
 

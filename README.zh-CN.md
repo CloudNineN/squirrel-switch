@@ -18,23 +18,23 @@ Squirrel Switch 是一个本地 AI 开发工具多账号切换助手。当前重
 
 ### Codex 账号
 
-![Codex 账号总览](docs/screenshots/codex-accounts.png)
+![Codex 账号总览](assets/screenshots/codex-accounts.png)
 
 ### 添加 Codex 账号
 
-![添加 Codex 账号](docs/screenshots/add-codex-account.png)
+![添加 Codex 账号](assets/screenshots/add-codex-account.png)
 
 ### 定时刷新
 
-![账号定时刷新](docs/screenshots/scheduled-refresh.png)
+![账号定时刷新](assets/screenshots/scheduled-refresh.png)
 
 ### Claude Code 配置
 
-![Claude Code Provider 配置](docs/screenshots/claude-code-profiles.png)
+![Claude Code Provider 配置](assets/screenshots/claude-code-profiles.png)
 
 ### 提示词管理
 
-![全局提示词管理](docs/screenshots/prompt-management.png)
+![全局提示词管理](assets/screenshots/prompt-management.png)
 
 ## 安装与运行
 
