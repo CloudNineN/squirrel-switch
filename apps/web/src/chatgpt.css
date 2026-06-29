@@ -1,0 +1,183 @@
+.chatgptPage {
+  display: grid;
+  gap: 16px;
+}
+
+.chatgptHero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.chatgptHero h2 {
+  margin-top: 2px;
+  font-size: 22px;
+}
+
+.chatgptHero p {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.chatgptProfilesTable {
+  min-width: 1080px;
+}
+
+.rowCheckbox {
+  width: 16px;
+  height: 16px;
+}
+
+.chatgptActionGrid {
+  grid-template-columns: repeat(3, minmax(240px, 1fr));
+}
+
+.chatgptAddGrid,
+.chatgptBackupGrid {
+  grid-template-columns: repeat(2, minmax(260px, 1fr));
+}
+
+.chatgptCreateActions {
+  width: 100%;
+  margin-top: auto;
+  display: grid;
+  gap: 8px;
+}
+
+.chatgptCreateActions button {
+  width: 100%;
+}
+
+.chatgptActionGrid .addCard {
+  min-height: 260px;
+}
+
+.chatgptBackupList {
+  display: grid;
+}
+
+.chatgptBackupRow {
+  display: grid;
+  grid-template-columns: 28px minmax(220px, 1fr) 120px;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.chatgptBackupRow:last-child {
+  border-bottom: 0;
+}
+
+.chatgptBackupRow > span:last-child {
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: right;
+}
+
+.comboBox {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+}
+
+.comboBox strong {
+  font-size: 13px;
+}
+
+.comboBox span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.comboBox small {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.pendingCodexList {
+  max-height: 268px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.pendingCodexRow {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+}
+
+.pendingCodexRow .identity {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.pendingCodexRow strong,
+.pendingCodexRow small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pendingCodexRow strong {
+  font-size: 13px;
+}
+
+.pendingCodexRow small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.pendingCodexRow button {
+  min-width: 86px;
+  white-space: nowrap;
+}
+
+@media (max-width: 1080px) {
+  .chatgptHero {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .chatgptActionGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .chatgptAddGrid,
+  .chatgptBackupGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .chatgptBackupRow {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .chatgptBackupRow > span:last-child {
+    grid-column: 2;
+    text-align: left;
+  }
+}

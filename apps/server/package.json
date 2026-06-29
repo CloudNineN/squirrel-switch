@@ -1,0 +1,26 @@
+{
+  "name": "@squirrel-switch/server",
+  "version": "1.12.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@squirrel-switch/shared": "workspace:*",
+    "@fastify/cors": "^11.1.0",
+    "@fastify/static": "^8.3.0",
+    "better-sqlite3": "^12.4.6",
+    "fastify": "^5.6.2",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.19.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}

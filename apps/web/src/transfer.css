@@ -1,0 +1,87 @@
+.exportAccountCard {
+  gap: 14px;
+}
+
+.exportAccountHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.exportAccountHeader > div {
+  display: flex;
+  gap: 6px;
+}
+
+.exportAccountHeader button {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.exportAccountList {
+  display: grid;
+  gap: 8px;
+  min-height: 96px;
+  max-height: 240px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.exportAccountItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+  padding: 10px;
+  cursor: pointer;
+}
+
+.exportAccountItem input {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.exportAccountText {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.exportAccountText strong,
+.exportAccountText small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.exportAccountText strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.exportAccountText small {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.exportAccountEmpty {
+  display: grid;
+  place-items: center;
+  min-height: 96px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 13px;
+}

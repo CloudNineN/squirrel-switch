@@ -1,0 +1,12 @@
+node_modules
+dist
+release
+.codex-tmp
+.DS_Store
+.idea/
+*.local
+.env
+.env.*
+apps/web/vite.config.ts.timestamp-*
+
+docs/

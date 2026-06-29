@@ -1,0 +1,111 @@
+.promptPage {
+  display: grid;
+  gap: 16px;
+}
+
+.promptLayout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.promptTabs {
+  display: grid;
+  gap: 8px;
+}
+
+.promptTab {
+  height: auto;
+  display: grid;
+  justify-content: start;
+  gap: 4px;
+  padding: 12px;
+  text-align: left;
+  background: var(--surface);
+}
+
+.promptTab strong {
+  font-size: 13px;
+}
+
+.promptTab small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.promptTab.active {
+  border-color: var(--text);
+  background: var(--surface-muted);
+  box-shadow: inset 0 0 0 1px var(--text);
+}
+
+.promptEditor {
+  min-width: 0;
+}
+
+.promptEditorBody {
+  display: grid;
+  gap: 14px;
+}
+
+.promptStatusStack {
+  display: grid;
+  gap: 10px;
+}
+
+.promptMetaGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.promptMetaItem {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+}
+
+.promptMetaItem span {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.promptMetaItem strong {
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.promptMetaItem .mono {
+  font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
+.promptPills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.promptWarning {
+  margin: 0;
+}
+
+.promptTextarea {
+  min-height: 520px;
+}
+
+@media (max-width: 900px) {
+  .promptLayout,
+  .promptMetaGrid {
+    grid-template-columns: 1fr;
+  }
+}

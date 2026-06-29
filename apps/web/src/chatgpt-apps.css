@@ -1,0 +1,154 @@
+.chatgptAppsPage {
+  display: grid;
+  gap: 16px;
+}
+
+.chatgptAppsLayout {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.appConfigItems {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+
+.appConfigItem {
+  height: auto;
+  min-height: 86px;
+  padding: 12px;
+  display: grid;
+  align-content: start;
+  justify-items: stretch;
+  gap: 6px;
+  text-align: left;
+  border-radius: var(--radius-md);
+}
+
+.appConfigItem.active {
+  border-color: var(--text);
+  background: var(--surface-muted);
+}
+
+.appConfigItem strong,
+.appConfigItem small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.appConfigItem small,
+.statusSummary {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.statusSummary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.appConfigForm {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.appConfigForm label {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.appConfigForm label.full {
+  grid-column: 1 / -1;
+}
+
+.appConfigForm textarea {
+  min-height: 88px;
+  font-family: inherit;
+}
+
+.checkLine {
+  align-content: end;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+}
+
+.checkLine input,
+.profileScopeRow input {
+  width: 16px;
+  height: 16px;
+}
+
+.profileScope {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+}
+
+.profileScopeRow {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+
+.appSyncTable {
+  min-width: 920px;
+}
+
+.appSyncTable .pill {
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 12px;
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+}
+
+.appSyncTable .pill.synced {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.appSyncTable .pill.pending {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.appSyncTable .pill.failed {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.appSyncTable .pill.skipped {
+  background: var(--info-bg);
+  color: var(--text-secondary);
+}
+
+.rowActions {
+  display: inline-flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.rowActions button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+}
+
+@media (max-width: 1160px) {
+  .chatgptAppsLayout {
+    grid-template-columns: 1fr;
+  }
+}

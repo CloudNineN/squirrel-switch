@@ -1,0 +1,221 @@
+.claudePage {
+  display: grid;
+  gap: 16px;
+}
+
+.currentConfigGrid {
+  display: grid;
+  gap: 16px;
+}
+
+.currentConfigHero {
+  display: grid;
+  gap: 12px;
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.currentConfigHero h2 {
+  font-size: 24px;
+}
+
+.currentConfigHero p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.field > span {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.field select,
+.field input,
+.field textarea {
+  width: 100%;
+}
+
+.field select {
+  height: 36px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 0 10px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.field.wide {
+  grid-column: 1 / -1;
+}
+
+.claudeQuickStart {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+}
+
+.quickIntro {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.quickIntro h2 {
+  margin-top: 2px;
+  font-size: 20px;
+}
+
+.eyebrow {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.providerGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.providerCard {
+  height: auto;
+  min-height: 72px;
+  justify-content: start;
+  align-items: start;
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  text-align: left;
+  background: var(--surface);
+}
+
+.providerCard strong {
+  font-size: 14px;
+}
+
+.providerCard small {
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.providerCard.active {
+  border-color: var(--text);
+  background: var(--surface-muted);
+  box-shadow: inset 0 0 0 1px var(--text);
+}
+
+.quickKeyRow {
+  display: grid;
+  grid-template-columns: minmax(280px, 1.4fr) minmax(180px, 0.8fr) minmax(180px, 0.8fr);
+  gap: 12px;
+}
+
+.quickKeyRow input {
+  height: 42px;
+}
+
+.quickActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.quickActions button {
+  min-width: 124px;
+}
+
+.advancedSettings {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.advancedSettings summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.advancedSettings[open] summary {
+  margin-bottom: 14px;
+}
+
+.advancedSettings[open] summary svg {
+  transform: rotate(180deg);
+}
+
+.claudeQuickStart textarea {
+  min-height: 96px;
+}
+
+.claudeFormGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  gap: 14px;
+}
+
+.checkRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.checkRow input {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.claudeProfilesTable {
+  min-width: 1080px;
+}
+
+.monoCell {
+  max-width: 260px;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
+.claudeTwoColumn {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.85fr) minmax(360px, 1.4fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.hiddenFileInput {
+  display: none;
+}
+
+@media (max-width: 980px) {
+  .claudeTwoColumn {
+    grid-template-columns: 1fr;
+  }
+
+  .quickKeyRow,
+  .claudeFormGrid {
+    grid-template-columns: 1fr;
+  }
+}
