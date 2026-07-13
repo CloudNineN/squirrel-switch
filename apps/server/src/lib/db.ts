@@ -276,6 +276,7 @@ export function migrate(): void {
       mcp_server_url TEXT,
       auth_type TEXT NOT NULL,
       auth_note TEXT,
+      encrypted_oauth_password BLOB,
       scope_type TEXT NOT NULL,
       enabled INTEGER NOT NULL DEFAULT 1,
       config_hash TEXT NOT NULL,
@@ -297,6 +298,8 @@ export function migrate(): void {
       profile_id TEXT NOT NULL,
       status TEXT NOT NULL,
       config_hash TEXT,
+      remote_connector_id TEXT,
+      remote_link_id TEXT,
       last_synced_at INTEGER,
       last_checked_at INTEGER,
       error TEXT,
@@ -337,9 +340,19 @@ export function migrate(): void {
   ensureColumn("chatgpt_profiles", "session_status", "TEXT NOT NULL DEFAULT 'unchecked'");
   ensureColumn("chatgpt_profiles", "last_checked_at", "INTEGER");
   ensureColumn("chatgpt_profiles", "last_check_error", "TEXT");
+  ensureColumn("chatgpt_app_configs", "encrypted_oauth_password", "BLOB");
+  ensureColumn("chatgpt_app_config_sync_states", "remote_connector_id", "TEXT");
+  ensureColumn("chatgpt_app_config_sync_states", "remote_link_id", "TEXT");
   db.prepare("UPDATE chatgpt_profiles SET session_status = 'unchecked' WHERE session_status IS NULL OR session_status = ''").run();
   migrateChatGptProfilesWithoutElectronColumns();
   mergeLegacyDatabase();
+  db.prepare(
+    `UPDATE chatgpt_profiles
+     SET display_name = account_email
+     WHERE account_email IS NOT NULL
+       AND trim(account_email) <> ''
+       AND display_name LIKE 'ChatGPT 账号 %'`,
+  ).run();
   cleanupDuplicateAccountIds();
   normalizeActiveAccount();
 }

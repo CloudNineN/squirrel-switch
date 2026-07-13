@@ -11,6 +11,7 @@ import { browserProfilesDir } from "./paths.js";
 import { nowSeconds } from "./time.js";
 import { writeRuntimeLog } from "./runtime-log.js";
 import { initializeChatGptAppSyncForProfile } from "./chatgpt-app-configs.js";
+import { initialChatGptProfileName, resolvedChatGptProfileName } from "./chatgpt-profile-name.js";
 
 type ChatGptSessionStatus = ChatGptProfileView["sessionStatus"];
 type ChatGptBrowserKind = ChatGptProfileView["browserKind"];
@@ -85,15 +86,16 @@ export function getChatGptProfile(id: string): ChatGptProfileView {
 
 export function createChatGptProfile(payload: CreateChatGptProfilePayload): ChatGptProfileView {
   const id = normalizeProfileId(payload.id) ?? randomUUID();
-  const displayName = normalizeDisplayName(payload.displayName, listChatGptProfiles().length + 1);
   const linkedAccountId =
     normalizeLinkedAccountId(payload.linkedCodexAccountId) ??
     findAvailableAccountIdByEmail(payload.linkedCodexEmailHint ?? payload.accountEmailHint, id);
   ensureLinkedAccountAvailable(linkedAccountId, id);
+  const accountEmailHint =
+    normalizeOptionalText(payload.accountEmailHint) ?? accountEmailForId(linkedAccountId);
+  const displayName = initialChatGptProfileName(payload.displayName, accountEmailHint);
   const browserKind = normalizeBrowserKind(payload.browserKind);
   const browserExecutablePath = normalizeOptionalText(payload.browserExecutablePath);
   const browserProfileDir = normalizeBrowserProfileDir(payload.browserProfileDir, id);
-  const accountEmailHint = normalizeOptionalText(payload.accountEmailHint);
   const planLabelHint = normalizeOptionalText(payload.planLabelHint);
   const now = nowSeconds();
 
@@ -153,7 +155,7 @@ export function updateChatGptProfile(
   const displayName =
     payload.displayName === undefined
       ? current.displayName
-      : normalizeDisplayName(payload.displayName, null);
+      : normalizeDisplayName(payload.displayName);
   const linkedAccountId =
     payload.linkedCodexAccountId === undefined
       ? current.linkedCodexAccountId
@@ -193,13 +195,20 @@ export function updateChatGptProfileStatus(
   const accountId = normalizeOptionalText(input.accountId) ?? current.accountId;
   const planType = normalizeOptionalText(input.planType) ?? current.planType;
   const planLabel = normalizeOptionalText(input.planLabel) ?? current.planLabel;
-  const subscriptionExpiresAt = input.subscriptionExpiresAt ?? current.subscriptionExpiresAt;
-  const subscriptionRenewsAt = input.subscriptionRenewsAt ?? current.subscriptionRenewsAt;
+  const hasNonExpiringPlan = isNonExpiringChatGptPlan(planType, planLabel);
+  const subscriptionExpiresAt = hasNonExpiringPlan ? null : input.subscriptionExpiresAt ?? current.subscriptionExpiresAt;
+  const subscriptionRenewsAt = hasNonExpiringPlan ? null : input.subscriptionRenewsAt ?? current.subscriptionRenewsAt;
+  const displayName = resolvedChatGptProfileName(
+    current.displayName,
+    current.accountEmail,
+    accountEmail,
+  );
   const linkedAccountId =
     findAvailableAccountIdByEmail(accountEmail, id) ?? current.linkedCodexAccountId;
   db.prepare(
     `UPDATE chatgpt_profiles
-     SET linked_codex_account_id = ?,
+     SET display_name = ?,
+         linked_codex_account_id = ?,
          account_email = ?,
          account_name = ?,
          account_id = ?,
@@ -213,6 +222,7 @@ export function updateChatGptProfileStatus(
          updated_at = ?
      WHERE id = ?`,
   ).run(
+    displayName,
     linkedAccountId,
     accountEmail,
     accountName,
@@ -227,6 +237,8 @@ export function updateChatGptProfileStatus(
     now,
     id,
   );
+
+  initializeChatGptAppSyncForProfile(id);
 
   void writeRuntimeLog(
     status === "available" ? "info" : "warn",
@@ -246,6 +258,13 @@ export function updateChatGptProfileStatus(
     checkedAt: now,
     error,
   };
+}
+
+function isNonExpiringChatGptPlan(planType: string | null, planLabel: string | null): boolean {
+  const values = [planType, planLabel]
+    .map((value) => value?.trim().toLowerCase())
+    .filter((value): value is string => Boolean(value));
+  return values.some((value) => value === "free" || value === "guest");
 }
 
 export function touchChatGptProfileOpened(id: string): ChatGptProfileView {
@@ -291,15 +310,22 @@ function joinedProfileQuery(suffix: string) {
   );
 }
 
-function normalizeDisplayName(value: string | undefined, fallbackIndex: number | null): string {
+function normalizeDisplayName(value: string | undefined): string {
   const trimmed = value?.trim();
   if (trimmed) {
     return trimmed;
   }
-  if (fallbackIndex !== null) {
-    return `ChatGPT 账号 ${fallbackIndex}`;
-  }
   throw new AppError("ChatGPT 备注不能为空");
+}
+
+function accountEmailForId(accountId: string | null): string | null {
+  if (!accountId) {
+    return null;
+  }
+  const row = db.prepare("SELECT email FROM accounts WHERE id = ?").get(accountId) as
+    | { email: string | null }
+    | undefined;
+  return normalizeOptionalText(row?.email);
 }
 
 function normalizeLinkedAccountId(value: string | null | undefined): string | null {

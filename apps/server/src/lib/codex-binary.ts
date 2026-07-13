@@ -7,29 +7,24 @@ import { join } from "node:path";
 const execFileAsync = promisify(execFile);
 const EXEC_TIMEOUT_MS = 3000;
 
-export async function resolveCodexBinary(configured?: string | null): Promise<string | null> {
-  const candidates = await codexBinaryCandidates(configured);
-  const seen = new Set<string>();
+export const CODEX_BINARY_NOT_FOUND_MESSAGE =
+  "未找到 codex 命令或 ChatGPT/Codex.app 内置 codex";
+
+export async function resolveCodexBinary(): Promise<string | null> {
+  const candidates = await codexBinaryCandidates();
   for (const candidate of candidates) {
-    const normalized = stripOuterQuotes(candidate);
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    if (await canRun(normalized)) {
-      return normalized;
+    if (await canRun(candidate)) {
+      return candidate;
     }
   }
   return null;
 }
 
-async function codexBinaryCandidates(configured?: string | null): Promise<string[]> {
+async function codexBinaryCandidates(): Promise<string[]> {
   return [
-    configured ?? "",
-    process.env.SQUIRREL_SWITCH_CODEX_BINARY ?? "",
     ...(process.platform === "win32" ? await windowsCodexCandidates() : []),
     ...(process.platform === "darwin"
-      ? ["/Applications/Codex.app/Contents/Resources/codex"]
+      ? ["/Applications/ChatGPT.app/Contents/Resources/codex"]
       : []),
     "codex",
     ...(process.platform === "win32" ? ["codex.exe"] : []),
@@ -59,17 +54,6 @@ async function windowsCodexCandidates(): Promise<string[]> {
   } catch {
     return [];
   }
-}
-
-function stripOuterQuotes(value: string): string {
-  const trimmed = value.trim();
-  if (
-    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-    (trimmed.startsWith("'") && trimmed.endsWith("'"))
-  ) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
 }
 
 async function canRun(path: string): Promise<boolean> {

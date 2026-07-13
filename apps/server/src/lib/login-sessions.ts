@@ -5,10 +5,14 @@ import { join } from "node:path";
 import type { AccountView } from "./db.js";
 import { AppServerClient } from "./app-server.js";
 import type { AppServerNotification } from "./app-server.js";
-import { resolveCodexBinary } from "./codex-binary.js";
-import { getSetting } from "./db.js";
+import { CODEX_BINARY_NOT_FOUND_MESSAGE, resolveCodexBinary } from "./codex-binary.js";
 import { loginSessionsDir } from "./paths.js";
-import { findActiveReloginMatch, importAuthJson, syncReloggedActiveAccountToDisk } from "./accounts.js";
+import {
+  findActiveReloginMatch,
+  importAuthJson,
+  refreshAccount,
+  syncReloggedActiveAccountToDisk,
+} from "./accounts.js";
 import { AppError, getErrorMessage } from "./errors.js";
 
 export type LoginSessionStatus = "running" | "imported" | "failed";
@@ -37,15 +41,16 @@ interface LoginSessionState extends LoginSessionView {
   client: AppServerClient | null;
   loginId: string | null;
   routeErrorRetryCount: number;
+  completing: boolean;
 }
 
 const sessions = new Map<string, LoginSessionState>();
-const LOGIN_CLIENT_VERSION = "1.12.0";
+const LOGIN_CLIENT_VERSION = "1.16.0";
 
 export async function startIsolatedLogin(): Promise<LoginSessionView> {
-  const codexBinary = await resolveCodexBinary(getSetting("codexBinaryPath"));
+  const codexBinary = await resolveCodexBinary();
   if (!codexBinary) {
-    throw new AppError("未找到 codex 命令或 Codex.app 内置 codex", 503);
+    throw new AppError(CODEX_BINARY_NOT_FOUND_MESSAGE, 503);
   }
 
   const id = randomUUID();
@@ -70,6 +75,7 @@ export async function startIsolatedLogin(): Promise<LoginSessionView> {
     client: null,
     loginId: null,
     routeErrorRetryCount: 0,
+    completing: false,
   };
   sessions.set(id, state);
 
@@ -204,7 +210,7 @@ function isLoginCompletedParams(
 }
 
 function handleAppServerExit(state: LoginSessionState, code: number | null): void {
-  if (state.status !== "running") {
+  if (state.status !== "running" || state.completing) {
     return;
   }
   state.status = "failed";
@@ -213,9 +219,10 @@ function handleAppServerExit(state: LoginSessionState, code: number | null): voi
 }
 
 async function completeLoginSession(state: LoginSessionState): Promise<void> {
-  if (state.status !== "running") {
+  if (state.status !== "running" || state.completing) {
     return;
   }
+  state.completing = true;
 
   state.completedAt = Math.floor(Date.now() / 1000);
   const authPath = join(state.codexHome, "auth.json");
@@ -230,8 +237,9 @@ async function completeLoginSession(state: LoginSessionState): Promise<void> {
     const authJson = await readFile(authPath, "utf8");
     const activeReloginMatch = findActiveReloginMatch(authJson);
     state.account = await importAuthJson({ authJson });
-    state.status = "imported";
     state.message = `已导入账号：${state.account.name}`;
+    await state.client?.stop();
+    state.client = null;
 
     if (activeReloginMatch) {
       try {
@@ -246,6 +254,15 @@ async function completeLoginSession(state: LoginSessionState): Promise<void> {
         state.message = `已导入账号：${state.account.name}，但写回当前登录态失败：${getErrorMessage(syncError)}`;
       }
     }
+
+    const importedMessage = state.message;
+    try {
+      state.account = await refreshAccount(state.account.id);
+      state.message = `${importedMessage}；首次限额已刷新`;
+    } catch (refreshError) {
+      state.message = `${importedMessage}；首次限额刷新失败：${getErrorMessage(refreshError)}`;
+    }
+    state.status = "imported";
   } catch (error) {
     state.status = "failed";
     state.message = `导入隔离 auth.json 失败：${getErrorMessage(error)}`;

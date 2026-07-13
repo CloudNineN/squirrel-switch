@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { db, mapChatGptProfile } from "./db.js";
 import type { ChatGptProfileJoinedRow } from "./db.js";
+import { decryptText, encryptText } from "./crypto.js";
 import { AppError } from "./errors.js";
 import { nowSeconds } from "./time.js";
 import { writeRuntimeLog } from "./runtime-log.js";
@@ -18,6 +19,7 @@ interface ChatGptProfileSummary {
   accountEmail: string | null;
   accountName: string | null;
   accountId: string | null;
+  planType: string | null;
   planLabel: string | null;
   browserKind: "chrome" | "edge" | "custom" | null;
   browserExecutablePath: string | null;
@@ -39,6 +41,7 @@ interface ChatGptAppConfigView {
   mcpServerUrl: string | null;
   authType: ChatGptAppAuthType;
   authNote: string | null;
+  hasOAuthPassword: boolean;
   scopeType: ChatGptAppScopeType;
   targetProfileIds: string[];
   enabled: boolean;
@@ -56,6 +59,8 @@ interface ChatGptAppSyncStateView {
   linkedCodexEmail: string | null;
   status: ChatGptAppSyncStatus;
   syncedConfigHash: string | null;
+  remoteConnectorId: string | null;
+  remoteLinkId: string | null;
   lastSyncedAt: number | null;
   lastCheckedAt: number | null;
   error: string | null;
@@ -71,6 +76,8 @@ interface UpsertChatGptAppConfigPayload {
   mcpServerUrl?: string | null;
   authType: ChatGptAppAuthType;
   authNote?: string | null;
+  oauthPassword?: string | null;
+  clearOAuthPassword?: boolean;
   scopeType: ChatGptAppScopeType;
   targetProfileIds?: string[];
   enabled: boolean;
@@ -79,6 +86,8 @@ interface UpsertChatGptAppConfigPayload {
 interface UpdateChatGptAppSyncStatusPayload {
   status: "pending" | "synced" | "failed" | "skipped";
   error?: string | null;
+  remoteConnectorId?: string | null;
+  remoteLinkId?: string | null;
 }
 
 interface ChatGptAppConfigRow {
@@ -91,6 +100,7 @@ interface ChatGptAppConfigRow {
   mcp_server_url: string | null;
   auth_type: string;
   auth_note: string | null;
+  encrypted_oauth_password: Buffer | null;
   scope_type: string;
   enabled: 0 | 1;
   config_hash: string;
@@ -106,6 +116,8 @@ interface ChatGptAppSyncStateRow {
   linked_codex_email: string | null;
   status: string;
   config_hash: string | null;
+  remote_connector_id: string | null;
+  remote_link_id: string | null;
   last_synced_at: number | null;
   last_checked_at: number | null;
   error: string | null;
@@ -121,6 +133,8 @@ interface NormalizedConfigInput {
   mcpServerUrl: string | null;
   authType: ChatGptAppAuthType;
   authNote: string | null;
+  oauthPassword: string | null;
+  clearOAuthPassword: boolean;
   scopeType: ChatGptAppScopeType;
   targetProfileIds: string[];
   enabled: boolean;
@@ -134,19 +148,20 @@ export function readChatGptAppConfigManagementState(): ChatGptAppConfigManagemen
   };
 }
 
-export function createChatGptAppConfig(payload: UpsertChatGptAppConfigPayload): ChatGptAppConfigView {
+export async function createChatGptAppConfig(payload: UpsertChatGptAppConfigPayload): Promise<ChatGptAppConfigView> {
   const input = normalizeConfigInput(payload);
   const id = randomUUID();
   const now = nowSeconds();
   const configHash = computeConfigHash(input);
+  const encryptedOAuthPassword = input.oauthPassword ? await encryptText(input.oauthPassword) : null;
 
   db.transaction(() => {
     db.prepare(
       `INSERT INTO chatgpt_app_configs (
          id, type, name, description, official_app_url, official_app_id,
-         mcp_server_url, auth_type, auth_note, scope_type, enabled,
+         mcp_server_url, auth_type, auth_note, encrypted_oauth_password, scope_type, enabled,
          config_hash, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       id,
       input.type,
@@ -157,6 +172,7 @@ export function createChatGptAppConfig(payload: UpsertChatGptAppConfigPayload): 
       input.mcpServerUrl,
       input.authType,
       input.authNote,
+      encryptedOAuthPassword,
       input.scopeType,
       input.enabled ? 1 : 0,
       configHash,
@@ -174,11 +190,27 @@ export function createChatGptAppConfig(payload: UpsertChatGptAppConfigPayload): 
 export function updateChatGptAppConfig(
   id: string,
   payload: UpsertChatGptAppConfigPayload,
-): ChatGptAppConfigView {
-  getConfigRow(id);
+): Promise<ChatGptAppConfigView> {
+  return updateChatGptAppConfigInternal(id, payload);
+}
+
+async function updateChatGptAppConfigInternal(
+  id: string,
+  payload: UpsertChatGptAppConfigPayload,
+): Promise<ChatGptAppConfigView> {
+  const current = getConfigRow(id);
   const input = normalizeConfigInput(payload);
   const now = nowSeconds();
   const configHash = computeConfigHash(input);
+  const markApplicablePending = shouldMarkApplicableSyncPending(current, input);
+  const shouldClearOAuthPassword =
+    input.clearOAuthPassword || input.type !== "custom_mcp" || input.authType !== "oauth";
+  const encryptedOAuthPassword =
+    shouldClearOAuthPassword || input.oauthPassword
+      ? input.oauthPassword
+        ? await encryptText(input.oauthPassword)
+        : null
+      : undefined;
 
   db.transaction(() => {
     db.prepare(
@@ -191,6 +223,7 @@ export function updateChatGptAppConfig(
            mcp_server_url = ?,
            auth_type = ?,
            auth_note = ?,
+           encrypted_oauth_password = COALESCE(?, encrypted_oauth_password),
            scope_type = ?,
            enabled = ?,
            config_hash = ?,
@@ -205,6 +238,7 @@ export function updateChatGptAppConfig(
       input.mcpServerUrl,
       input.authType,
       input.authNote,
+      encryptedOAuthPassword ?? null,
       input.scopeType,
       input.enabled ? 1 : 0,
       configHash,
@@ -212,11 +246,23 @@ export function updateChatGptAppConfig(
       id,
     );
     replaceTargetProfiles(id, input);
-    reconcileConfigSyncRows(id, true);
+    if (shouldClearOAuthPassword && encryptedOAuthPassword === null) {
+      db.prepare("UPDATE chatgpt_app_configs SET encrypted_oauth_password = NULL WHERE id = ?").run(id);
+    }
+    reconcileConfigSyncRows(id, markApplicablePending);
   })();
 
   void writeRuntimeLog("info", "chatgpt-apps", `更新 ChatGPT 应用配置：${input.name}`);
   return getChatGptAppConfig(id);
+}
+
+export async function readChatGptAppConfigDesktopSecret(id: string): Promise<ChatGptAppConfigView & { oauthPassword: string | null }> {
+  const config = getChatGptAppConfig(id);
+  const row = getConfigRow(id);
+  return {
+    ...config,
+    oauthPassword: row.encrypted_oauth_password ? await decryptText(row.encrypted_oauth_password) : null,
+  };
 }
 
 export function deleteChatGptAppConfig(id: string): void {
@@ -231,26 +277,30 @@ export function updateChatGptAppSyncStatus(
   payload: UpdateChatGptAppSyncStatusPayload,
 ): ChatGptAppConfigView {
   const config = getConfigRow(configId);
-  ensureProfileExists(profileId);
-  const status = normalizeSyncStatus(payload.status);
+  const profile = getProfilePlan(profileId);
+  const status = isGuestChatGptPlan(profile.planType, profile.planLabel) ? "skipped" : normalizeSyncStatus(payload.status);
   const now = nowSeconds();
   const error = status === "failed" ? normalizeOptionalText(payload.error) ?? "同步失败" : null;
   const syncedAt = status === "synced" ? now : null;
   const hash = status === "synced" || status === "skipped" ? config.config_hash : null;
+  const remoteConnectorId = status === "synced" ? normalizeOptionalText(payload.remoteConnectorId) : null;
+  const remoteLinkId = status === "synced" ? normalizeOptionalText(payload.remoteLinkId) : null;
 
   db.prepare(
     `INSERT INTO chatgpt_app_config_sync_states (
-       config_id, profile_id, status, config_hash, last_synced_at,
-       last_checked_at, error, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       config_id, profile_id, status, config_hash, remote_connector_id,
+       remote_link_id, last_synced_at, last_checked_at, error, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(config_id, profile_id) DO UPDATE SET
        status = excluded.status,
        config_hash = excluded.config_hash,
+       remote_connector_id = excluded.remote_connector_id,
+       remote_link_id = excluded.remote_link_id,
        last_synced_at = excluded.last_synced_at,
        last_checked_at = excluded.last_checked_at,
        error = excluded.error,
        updated_at = excluded.updated_at`,
-  ).run(configId, profileId, status, hash, syncedAt, now, error, now, now);
+  ).run(configId, profileId, status, hash, remoteConnectorId, remoteLinkId, syncedAt, now, error, now, now);
 
   void writeRuntimeLog("info", "chatgpt-apps", `更新 ChatGPT 应用同步状态：${config.name} ${status}`);
   return getChatGptAppConfig(configId);
@@ -286,6 +336,7 @@ function mapConfigRow(row: ChatGptAppConfigRow): ChatGptAppConfigView {
     mcpServerUrl: row.mcp_server_url,
     authType: normalizeStoredAuthType(row.auth_type),
     authNote: row.auth_note,
+    hasOAuthPassword: Boolean(row.encrypted_oauth_password),
     scopeType: normalizeStoredScopeType(row.scope_type),
     targetProfileIds: listTargetProfileIds(row.id),
     enabled: row.enabled === 1,
@@ -323,6 +374,8 @@ function listSyncStates(configId: string): ChatGptAppSyncStateView[] {
               a.email AS linked_codex_email,
               s.status,
               s.config_hash,
+              s.remote_connector_id,
+              s.remote_link_id,
               s.last_synced_at,
               s.last_checked_at,
               s.error,
@@ -342,6 +395,8 @@ function listSyncStates(configId: string): ChatGptAppSyncStateView[] {
     linkedCodexEmail: row.linked_codex_email,
     status: normalizeStoredSyncStatus(row.status),
     syncedConfigHash: row.config_hash,
+    remoteConnectorId: row.remote_connector_id,
+    remoteLinkId: row.remote_link_id,
     lastSyncedAt: row.last_synced_at,
     lastCheckedAt: row.last_checked_at,
     error: row.error,
@@ -369,6 +424,7 @@ function listProfiles(): ChatGptProfileSummary[] {
       accountEmail: profile.accountEmail,
       accountName: profile.accountName,
       accountId: profile.accountId,
+      planType: profile.planType,
       planLabel: profile.planLabel,
       browserKind: profile.browserKind,
       browserExecutablePath: profile.browserExecutablePath,
@@ -387,11 +443,16 @@ function ensureMissingSyncRows(): void {
 function reconcileConfigSyncRows(configId: string, markApplicablePending: boolean): void {
   const config = getConfigRow(configId);
   const targetIds = targetProfileIdsFor(config);
-  const profiles = db.prepare("SELECT id FROM chatgpt_profiles").all() as Array<{ id: string }>;
+  const profiles = db
+    .prepare("SELECT id, plan_type, plan_label FROM chatgpt_profiles")
+    .all() as Array<{ id: string; plan_type: string | null; plan_label: string | null }>;
   const now = nowSeconds();
 
   for (const profile of profiles) {
-    const applicable = config.enabled === 1 && targetIds.has(profile.id);
+    const applicable =
+      config.enabled === 1 &&
+      targetIds.has(profile.id) &&
+      !isGuestChatGptPlan(profile.plan_type, profile.plan_label);
     const existing = db
       .prepare(
         `SELECT status
@@ -399,24 +460,33 @@ function reconcileConfigSyncRows(configId: string, markApplicablePending: boolea
          WHERE config_id = ? AND profile_id = ?`,
       )
       .get(configId, profile.id) as { status: string } | undefined;
+    const existingStatus = existing ? normalizeStoredSyncStatus(existing.status) : null;
     const nextStatus: StoredSyncStatus = applicable
       ? markApplicablePending
         ? "pending"
-        : existing
-          ? normalizeStoredSyncStatus(existing.status)
+        : existingStatus && existingStatus !== "skipped"
+          ? existingStatus
           : "pending"
       : "skipped";
-    const nextHash = nextStatus === "skipped" ? config.config_hash : null;
+    const nextHash = nextStatus === "synced" || nextStatus === "skipped" ? config.config_hash : null;
 
     db.prepare(
       `INSERT INTO chatgpt_app_config_sync_states (
-         config_id, profile_id, status, config_hash, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?)
+         config_id, profile_id, status, config_hash, remote_connector_id, remote_link_id, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)
        ON CONFLICT(config_id, profile_id) DO UPDATE SET
          status = excluded.status,
          config_hash = CASE
            WHEN excluded.status = 'pending' THEN chatgpt_app_config_sync_states.config_hash
            ELSE excluded.config_hash
+         END,
+         remote_connector_id = CASE
+           WHEN excluded.status IN ('pending', 'skipped') THEN NULL
+           ELSE chatgpt_app_config_sync_states.remote_connector_id
+         END,
+         remote_link_id = CASE
+           WHEN excluded.status IN ('pending', 'skipped') THEN NULL
+           ELSE chatgpt_app_config_sync_states.remote_link_id
          END,
          error = CASE
            WHEN excluded.status IN ('pending', 'skipped') THEN NULL
@@ -425,6 +495,13 @@ function reconcileConfigSyncRows(configId: string, markApplicablePending: boolea
          updated_at = excluded.updated_at`,
     ).run(configId, profile.id, nextStatus, nextHash, now, now);
   }
+}
+
+function isGuestChatGptPlan(planType: string | null, planLabel: string | null): boolean {
+  const values = [planType, planLabel]
+    .map((value) => value?.trim().toLowerCase())
+    .filter((value): value is string => Boolean(value));
+  return values.some((value) => value === "guest");
 }
 
 function targetProfileIdsFor(config: ChatGptAppConfigRow): Set<string> {
@@ -458,6 +535,7 @@ function normalizeConfigInput(payload: UpsertChatGptAppConfigPayload): Normalize
   const mcpServerUrl = normalizeOptionalUrl(payload.mcpServerUrl, "MCP Server URL");
   const authType = normalizeStoredAuthType(payload.authType);
   const authNote = normalizeOptionalText(payload.authNote);
+  const oauthPassword = normalizeOptionalText(payload.oauthPassword);
   const scopeType = normalizeStoredScopeType(payload.scopeType);
   const targetProfileIds = uniqueProfileIds(payload.targetProfileIds ?? []);
 
@@ -479,6 +557,8 @@ function normalizeConfigInput(payload: UpsertChatGptAppConfigPayload): Normalize
     mcpServerUrl: type === "custom_mcp" ? mcpServerUrl : null,
     authType,
     authNote,
+    oauthPassword: type === "custom_mcp" && authType === "oauth" ? oauthPassword : null,
+    clearOAuthPassword: payload.clearOAuthPassword === true,
     scopeType,
     targetProfileIds: scopeType === "specific_profiles" ? targetProfileIds : [],
     enabled: payload.enabled,
@@ -486,6 +566,16 @@ function normalizeConfigInput(payload: UpsertChatGptAppConfigPayload): Normalize
 }
 
 function computeConfigHash(input: NormalizedConfigInput): string {
+  if (input.type === "custom_mcp") {
+    return createHash("sha256")
+      .update(
+        JSON.stringify({
+          mcpServerUrl: input.mcpServerUrl,
+          type: input.type,
+        }),
+      )
+      .digest("hex");
+  }
   const targetProfileIds = [...input.targetProfileIds].sort();
   return createHash("sha256")
     .update(
@@ -504,6 +594,20 @@ function computeConfigHash(input: NormalizedConfigInput): string {
       }),
     )
     .digest("hex");
+}
+
+function shouldMarkApplicableSyncPending(
+  current: ChatGptAppConfigRow,
+  input: NormalizedConfigInput,
+): boolean {
+  const currentType = normalizeStoredConfigType(current.type);
+  if (currentType !== input.type) {
+    return true;
+  }
+  if (input.type === "custom_mcp") {
+    return current.mcp_server_url !== input.mcpServerUrl;
+  }
+  return current.config_hash !== computeConfigHash(input);
 }
 
 function normalizeRequiredText(value: string, label: string): string {
@@ -550,6 +654,16 @@ function ensureProfileExists(profileId: string): void {
   if (!row) {
     throw new AppError("ChatGPT Profile 不存在", 404);
   }
+}
+
+function getProfilePlan(profileId: string): { planType: string | null; planLabel: string | null } {
+  const row = db
+    .prepare("SELECT plan_type, plan_label FROM chatgpt_profiles WHERE id = ?")
+    .get(profileId) as { plan_type: string | null; plan_label: string | null } | undefined;
+  if (!row) {
+    throw new AppError("ChatGPT Profile 不存在", 404);
+  }
+  return { planType: row.plan_type, planLabel: row.plan_label };
 }
 
 function normalizeStoredConfigType(value: string): ChatGptAppConfigType {

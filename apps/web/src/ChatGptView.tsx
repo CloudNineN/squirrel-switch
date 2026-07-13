@@ -6,14 +6,13 @@ import {
   Link2,
   LogIn,
   MessageSquare,
-  Pencil,
-  RefreshCcw,
-  Trash2,
   Upload,
 } from "lucide-react";
 import type {
   AccountView,
   ChatGptAccountStatusResult,
+  ChatGptAppConfigManagementState,
+  ChatGptAppConfigView,
   ChatGptDesktopProfileInput,
   ChatGptProfileView,
   LoginSessionView,
@@ -21,6 +20,12 @@ import type {
 import { api } from "./api.js";
 import { useI18n } from "./i18n.js";
 import type { AppLocale } from "./i18n.js";
+import {
+  applyChatGptAppSyncCheckResult,
+  ChatGptAppSyncDialog,
+  isProfileAppSyncEligible,
+} from "./chatgpt-app-sync.js";
+import { ProfilesTable, profileDisplayLabel, readablePlanLabel } from "./ChatGptProfilesTable.js";
 import "./chatgpt.css";
 
 type Busy = string | null;
@@ -28,8 +33,6 @@ export type ChatGptTab = "current" | "add" | "backup";
 
 const AUTO_STATUS_REFRESH_INTERVAL_MS = 8_000;
 const AUTO_STATUS_REFRESH_MAX_ATTEMPTS = 38;
-const MANUAL_STATUS_CHECK_MAX_ATTEMPTS = 3;
-const MANUAL_STATUS_CHECK_RETRY_DELAY_MS = 1_200;
 const AUTO_STATUS_REFRESH_DELAYS_MS = Array.from(
   { length: AUTO_STATUS_REFRESH_MAX_ATTEMPTS },
   (_, index) => (index + 1) * AUTO_STATUS_REFRESH_INTERVAL_MS,
@@ -38,6 +41,11 @@ const AUTO_STATUS_REFRESH_DELAYS_MS = Array.from(
 interface CheckProfileStatusOptions {
   persistUnavailable?: boolean;
   closeAfterCheck?: boolean;
+}
+
+interface DetectAppSyncOptions {
+  requireActive?: boolean;
+  suppressInactiveError?: boolean;
 }
 
 interface ChatGptViewProps {
@@ -63,6 +71,8 @@ export function ChatGptView({
 }: ChatGptViewProps) {
   const { t, locale } = useI18n();
   const [profiles, setProfiles] = useState<ChatGptProfileView[]>([]);
+  const [appConfigState, setAppConfigState] = useState<ChatGptAppConfigManagementState | null>(null);
+  const [appSyncProfile, setAppSyncProfile] = useState<ChatGptProfileView | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [backupPassword, setBackupPassword] = useState("");
   const [importPassword, setImportPassword] = useState("");
@@ -77,13 +87,17 @@ export function ChatGptView({
   const openedComboUrlsRef = useRef<Set<string>>(new Set());
   const autoStartedComboNonceRef = useRef<number | null>(null);
   const autoStartedComboCodexProfileIdsRef = useRef<Set<string>>(new Set());
+  const startingCodexOAuthProfileIdRef = useRef<string | null>(null);
+  const comboTaskNoticeUrlRef = useRef<string | null>(null);
   const comboProfileRef = useRef<ChatGptProfileView | null>(null);
   const comboLoginSessionRef = useRef<LoginSessionView | null>(null);
   const profilesRef = useRef<ChatGptProfileView[]>([]);
   const autoStatusRefreshTimersRef = useRef<Map<string, number[]>>(new Map());
   const autoStatusRefreshSyncedRef = useRef<Set<string>>(new Set());
+  const autoAppSyncCheckedRef = useRef<Set<string>>(new Set());
 
   const selectedProfiles = profiles.filter((profile) => selectedIds.includes(profile.id));
+  const appConfigs = appConfigState?.configs ?? [];
 
   useEffect(() => {
     void load();
@@ -112,6 +126,19 @@ export function ChatGptView({
     }
     onPreselectedAccountConsumed();
   }, [activeTab, onPreselectedAccountConsumed, preselectedAccountId]);
+
+  useEffect(() => {
+    if (activeTab !== "current" || profiles.length === 0 || appConfigs.length === 0 || !window.squirrelSwitchDesktop) {
+      return;
+    }
+    for (const profile of profiles) {
+      if (!isProfileAppSyncEligible(profile) || autoAppSyncCheckedRef.current.has(profile.id)) {
+        continue;
+      }
+      autoAppSyncCheckedRef.current.add(profile.id);
+      void detectProfileAppSync(profile, { requireActive: true, suppressInactiveError: true });
+    }
+  }, [activeTab, profiles, appConfigs.length]);
 
   useEffect(() => {
     if (
@@ -152,9 +179,13 @@ export function ChatGptView({
   async function load() {
     setError(null);
     try {
-      const nextProfiles = await api.chatGptProfiles();
+      const [nextProfiles, nextAppConfigState] = await Promise.all([
+        api.chatGptProfiles(),
+        api.chatGptAppConfigs(),
+      ]);
       profilesRef.current = nextProfiles;
       setProfiles(nextProfiles);
+      setAppConfigState(nextAppConfigState);
       onProfilesChanged?.(nextProfiles);
       return nextProfiles;
     } catch (err) {
@@ -173,10 +204,35 @@ export function ChatGptView({
         await load();
       }
     } catch (err) {
+      setNotice(null);
       setError(errorMessage(err));
     } finally {
       setBusy(null);
     }
+  }
+
+  async function showBrowserTaskNotice(
+    profile: ChatGptProfileView,
+    message: string,
+    options: { blocking?: boolean; preferredUrl?: string } = {},
+  ) {
+    setNotice(message);
+    await window.squirrelSwitchDesktop?.showChatGptTaskNotice({
+      profile: toDesktopProfile(profile),
+      message,
+      blocking: options.blocking === true,
+      preferredUrl: options.preferredUrl,
+    }).catch(() => undefined);
+  }
+
+  async function clearBrowserTaskNotice(
+    profile: ChatGptProfileView,
+    preferredUrl?: string | null,
+  ) {
+    await window.squirrelSwitchDesktop?.clearChatGptTaskNotice({
+      profile: toDesktopProfile(profile),
+      preferredUrl: preferredUrl ?? undefined,
+    }).catch(() => undefined);
   }
 
   async function checkProfileStatus(
@@ -192,7 +248,10 @@ export function ChatGptView({
     if (!result.status) {
       throw new Error(result.error ?? t("ChatGPT 状态检查失败"));
     }
-    if (options.persistUnavailable !== false || hasChatGptStatusSignal(result.status)) {
+    if (
+      result.status.status !== "unchecked" &&
+      (options.persistUnavailable !== false || hasChatGptStatusSignal(result.status))
+    ) {
       await api.checkChatGptProfile(profile.id, {
         status: result.status.status,
         accountEmail: result.status.accountEmail,
@@ -208,52 +267,93 @@ export function ChatGptView({
     return result.status;
   }
 
-  async function checkProfileStatusWithRetries(
-    profile: ChatGptProfileView,
-  ): Promise<ChatGptAccountStatusResult> {
-    let lastError: unknown = null;
-    for (let attempt = 1; attempt <= MANUAL_STATUS_CHECK_MAX_ATTEMPTS; attempt += 1) {
-      try {
-        const status = await checkProfileStatus(profile, { closeAfterCheck: true });
-        if (status.status !== "available" || hasChatGptStatusSignal(status) || attempt === MANUAL_STATUS_CHECK_MAX_ATTEMPTS) {
-          return status;
-        }
-      } catch (err) {
-        lastError = err;
-        if (attempt === MANUAL_STATUS_CHECK_MAX_ATTEMPTS) {
-          throw err;
-        }
-      }
-      await sleep(MANUAL_STATUS_CHECK_RETRY_DELAY_MS);
-    }
-    throw lastError instanceof Error ? lastError : new Error(t("ChatGPT 状态检查失败"));
-  }
-
-  async function checkProfileStatusManually(profile: ChatGptProfileView) {
-    setNotice(t("正在后台检查 ChatGPT 登录状态：{name}", { name: profileDisplayLabel(profile, t) }));
-    const status = await checkProfileStatusWithRetries(profile);
-    if (status.status === "available") {
-      setNotice(t("ChatGPT 检查成功：{name}", { name: profileDisplayLabel(profile, t) }));
-      return;
-    }
-    setError(t("ChatGPT 检查失败：{reason}", { reason: status.error ?? statusLabel(status.status, t) }));
-  }
-
   async function checkAllProfiles() {
     await run("check-all-chatgpt", async () => {
-      setNotice(t("正在后台检查全部 ChatGPT 会话"));
+      const desktop = requireDesktop();
       let available = 0;
       let failed = 0;
-      for (const profile of profiles) {
-        const status = await checkProfileStatusWithRetries(profile);
-        if (status.status === "available") {
-          available += 1;
-        } else {
+      let appSyncChecked = 0;
+      let appSyncFailed = 0;
+      const total = profiles.length;
+      for (const [index, profile] of profiles.entries()) {
+        const label = profileDisplayLabel(profile, t);
+        const current = index + 1;
+        clearAutoStatusRefresh(profile.id);
+        setNotice(t("正在批量检查 ChatGPT 会话：{current}/{total} {name}", { current, total, name: label }));
+        try {
+          const openResult = await desktop.openChatGpt(toDesktopProfile(profile));
+          if (!openResult.opened) {
+            failed += 1;
+            continue;
+          }
+          await api.markChatGptProfileOpened(profile.id).catch(() => undefined);
+          const status = await checkProfileStatus(profile, { closeAfterCheck: true });
+          if (status.status === "available") {
+            available += 1;
+            const checkedProfile = { ...profile, ...statusToProfileFields(status) };
+            if (isProfileAppSyncEligible(checkedProfile)) {
+              try {
+                appSyncChecked += await detectProfileAppSync(checkedProfile, { requireActive: true, suppressInactiveError: true });
+              } catch {
+                appSyncFailed += 1;
+              }
+            }
+          } else {
+            failed += 1;
+          }
+        } catch {
           failed += 1;
+        } finally {
+          await desktop.closeChatGpt(toDesktopProfile(profile)).catch(() => undefined);
         }
       }
-      setNotice(t("已检查全部 ChatGPT 会话：{success} 个可用，{failed} 个失败", { success: available, failed }));
+      setNotice(
+        appSyncChecked > 0 || appSyncFailed > 0
+          ? t("已检查全部 ChatGPT 会话：{success} 个可用，{failed} 个失败；应用同步已更新 {apps} 项，{appFailed} 个账号检测失败", {
+              success: available,
+              failed,
+              apps: appSyncChecked,
+              appFailed: appSyncFailed,
+            })
+          : t("已检查全部 ChatGPT 会话：{success} 个可用，{failed} 个失败", { success: available, failed }),
+      );
     });
+  }
+
+  async function detectProfileAppSync(
+    profile: ChatGptProfileView,
+    options: DetectAppSyncOptions = {},
+  ): Promise<number> {
+    const desktop = window.squirrelSwitchDesktop;
+    if (!desktop || appConfigs.length === 0 || !isProfileAppSyncEligible(profile)) {
+      return 0;
+    }
+    const profileName = profileDisplayLabel(profile, t);
+    setNotice(t("正在检测 ChatGPT 应用同步状态：{name}", { name: profileName }));
+    const result = await desktop.checkChatGptAppSync({
+      profile: toDesktopProfile(profile),
+      requireActive: options.requireActive === true,
+    });
+    if (!result.result) {
+      const message = result.error ?? t("ChatGPT 应用同步检测失败");
+      if (options.suppressInactiveError && options.requireActive && message.includes("未打开")) {
+        setNotice(t("ChatGPT 应用同步检测已跳过：{name} 未打开", { name: profileName }));
+        return 0;
+      }
+      throw new Error(message);
+    }
+    const updated = await applyChatGptAppSyncCheckResult(
+      profile,
+      appConfigs,
+      result.result,
+      (config) => setAppConfigState((current) => replaceAppConfig(current, config)),
+    );
+    setNotice(
+      updated > 0
+        ? t("ChatGPT 应用同步状态已更新：{name}", { name: profileName })
+        : t("ChatGPT 应用同步状态已检查：{name}", { name: profileName }),
+    );
+    return updated;
   }
 
   async function createProfile(
@@ -269,26 +369,43 @@ export function ChatGptView({
         setNotice(t("已创建并打开 ChatGPT，登录完成后会自动同步到列表"));
         return;
       }
-      await openProfile(profile, false, false);
+      await openProfile(profile, false, false, false);
       setComboProfile(profile);
       setComboLoginSession(null);
       openedComboUrlsRef.current.clear();
       autoStartedComboCodexProfileIdsRef.current.delete(profile.id);
-      setNotice(t("ChatGPT 登录完成后会自动继续 Codex OAuth"));
+      setNotice(t("ChatGPT 登录完成后，可在同一浏览器继续 Codex OAuth"));
     });
   }
 
-  async function openProfile(profile: ChatGptProfileView, reload = true, checkAfterOpen = true) {
+  async function openProfile(
+    profile: ChatGptProfileView,
+    reload = true,
+    checkAfterOpen = true,
+    scheduleStatusRefresh = true,
+  ) {
     const desktop = requireDesktop();
+    setNotice(t("正在打开 ChatGPT：{name}", { name: profileDisplayLabel(profile, t) }));
     const result = await desktop.openChatGpt(toDesktopProfile(profile));
     if (!result.opened) {
       throw new Error(result.error ?? t("ChatGPT 窗口打开失败"));
     }
     await api.markChatGptProfileOpened(profile.id);
     if (checkAfterOpen) {
-      await checkProfileStatus(profile, { closeAfterCheck: true }).catch(() => undefined);
+      setNotice(t("正在后台检查 ChatGPT 登录状态：{name}", { name: profileDisplayLabel(profile, t) }));
+      const status = await checkProfileStatus(profile, {
+        closeAfterCheck: true,
+        persistUnavailable: false,
+      }).catch(() => null);
+      setNotice(
+        status && hasChatGptStatusSignal(status)
+          ? t("已同步 ChatGPT 登录信息")
+          : t("已打开 ChatGPT，登录完成后会自动同步到列表"),
+      );
     }
-    scheduleAutoStatusRefresh(profile);
+    if (scheduleStatusRefresh) {
+      scheduleAutoStatusRefresh(profile);
+    }
     if (reload) {
       await load();
     }
@@ -314,10 +431,18 @@ export function ChatGptView({
       clearAutoStatusRefresh(profileId);
       return;
     }
+    const profileName = profileDisplayLabel(profile, t);
     try {
+      setNotice(t("正在自动检查 ChatGPT 登录状态：{name}", { name: profileName }));
       const status = await checkProfileStatus(profile, { closeAfterCheck: true, persistUnavailable: false });
+      if (status.status === "unchecked") {
+        clearAutoStatusRefresh(profileId);
+        setNotice(status.error ?? t("ChatGPT 自动检查已停止：{name}", { name: profileName }));
+        return;
+      }
       await maybeStartComboCodexOAuth(profile, status);
       if (!hasChatGptStatusSignal(status)) {
+        setNotice(t("正在等待 ChatGPT 登录完成：{name}", { name: profileName }));
         return;
       }
       await load();
@@ -333,6 +458,7 @@ export function ChatGptView({
     } catch {
       if (isLastAttempt) {
         clearAutoStatusRefresh(profileId);
+        setNotice(t("ChatGPT 自动检查已停止：{name}", { name: profileName }));
       }
     }
   }
@@ -385,6 +511,7 @@ export function ChatGptView({
     }
     await run(`delete-${profile.id}`, async () => {
       clearAutoStatusRefresh(profile.id);
+      setNotice(t("正在清除 ChatGPT 浏览器会话：{name}", { name: profileDisplayLabel(profile, t) }));
       const result = await requireDesktop().clearChatGptSession(toDesktopProfile(profile));
       if (!result.cleared) {
         throw new Error(result.error ?? t("清除 ChatGPT 会话失败"));
@@ -398,6 +525,27 @@ export function ChatGptView({
     const profile = comboProfile;
     if (!profile) {
       setError(t("请先创建组合 ChatGPT 会话"));
+      return;
+    }
+    await startComboCodexOAuth(profile, false);
+  }
+
+  async function bindCodexToProfile(profile: ChatGptProfileView) {
+    if (profile.linkedCodexAccountId) {
+      return;
+    }
+    const matchedAccount = findCodexAccountByEmail(accounts, profile.accountEmail);
+    if (matchedAccount) {
+      await run(`bind-codex-${profile.id}`, async () => {
+        clearAutoStatusRefresh(profile.id);
+        const updated = await api.updateChatGptProfile(profile.id, {
+          linkedCodexAccountId: matchedAccount.id,
+        });
+        setProfiles((current) => replaceProfile(current, updated));
+        profilesRef.current = replaceProfile(profilesRef.current, updated);
+        onProfilesChanged?.(profilesRef.current);
+        setNotice(t("已绑定本机 Codex 账号：{name}", { name: matchedAccount.name }));
+      }, false);
       return;
     }
     await startComboCodexOAuth(profile, false);
@@ -423,20 +571,57 @@ export function ChatGptView({
   }
 
   async function startComboCodexOAuth(profile: ChatGptProfileView, automatic: boolean) {
+    const runningSession = comboLoginSessionRef.current;
+    const runningProfile = comboProfileRef.current;
+    if (runningSession?.status === "running") {
+      if (runningProfile?.id === profile.id) {
+        if (runningSession.verificationUrl) {
+          await openCodexLoginWindow(profile, runningSession.verificationUrl);
+        } else {
+          setNotice(t("正在获取 Codex OAuth 授权链接"));
+        }
+        return;
+      }
+      setError(t("请先完成当前 Codex OAuth 绑定"));
+      return;
+    }
+    if (startingCodexOAuthProfileIdRef.current === profile.id) {
+      setNotice(t("正在获取 Codex OAuth 授权链接"));
+      return;
+    }
+    startingCodexOAuthProfileIdRef.current = profile.id;
+    if (comboProfileRef.current?.id !== profile.id) {
+      setComboProfile(profile);
+      comboProfileRef.current = profile;
+      openedComboUrlsRef.current.clear();
+    }
+    clearAutoStatusRefresh(profile.id);
     setBusy("combo-codex-login");
     setError(null);
-    setNotice(automatic ? t("已检测到 ChatGPT 登录，正在自动打开 Codex OAuth") : null);
+    setNotice(
+      automatic
+        ? t("已检测到 ChatGPT 登录，正在自动打开 Codex OAuth")
+        : t("正在打开 Codex OAuth 授权：{name}", { name: profileDisplayLabel(profile, t) }),
+    );
+    let keepBrowserNotice = false;
+    await showBrowserTaskNotice(profile, t("Squirrel Switch 正在向 Codex 获取 OAuth 授权链接"));
     try {
       const session = await api.startLogin();
       comboLoginSessionRef.current = session;
       setComboLoginSession(session);
+      keepBrowserNotice = session.status === "running";
       await handleComboLoginSession(session, profile);
     } catch (err) {
       setError(errorMessage(err));
+      await clearBrowserTaskNotice(profile, comboTaskNoticeUrlRef.current);
       if (automatic) {
         autoStartedComboCodexProfileIdsRef.current.delete(profile.id);
       }
     } finally {
+      startingCodexOAuthProfileIdRef.current = null;
+      if (!keepBrowserNotice) {
+        await clearBrowserTaskNotice(profile, comboTaskNoticeUrlRef.current);
+      }
       setBusy(null);
     }
   }
@@ -451,33 +636,57 @@ export function ChatGptView({
       return;
     }
     if (session.status === "imported" && session.account) {
-      let noticeText = t("组合账号已保存，首次限额已刷新");
+      let noticeText = session.message;
+      await showBrowserTaskNotice(
+        profile,
+        t("Squirrel Switch 正在导入 Codex 登录态"),
+        { preferredUrl: comboTaskNoticeUrlRef.current ?? undefined },
+      );
       try {
-        await api.refresh(session.account.id);
+        const updated = await api.updateChatGptProfile(profile.id, {
+          linkedCodexAccountId: session.account.id,
+        });
+        setProfiles((current) => replaceProfile(current, updated));
+        profilesRef.current = replaceProfile(profilesRef.current, updated);
+        onProfilesChanged?.(profilesRef.current);
       } catch (err) {
-        noticeText = t("组合账号已保存，首次限额刷新失败：{message}", {
+        noticeText = t("组合账号已保存，绑定 Codex 失败：{message}", {
           message: errorMessage(err),
         });
       }
       onAccountsChanged?.();
+      setNotice(t("正在检查组合 ChatGPT 登录状态：{name}", { name: profileDisplayLabel(profile, t) }));
       await checkProfileStatus(profile, { closeAfterCheck: true, persistUnavailable: false }).catch(() => undefined);
       scheduleAutoStatusRefresh(profile);
       setComboProfile(null);
       comboProfileRef.current = null;
       comboLoginSessionRef.current = null;
       setComboLoginSession(null);
+      await clearBrowserTaskNotice(profile, comboTaskNoticeUrlRef.current);
+      comboTaskNoticeUrlRef.current = null;
       await load();
       setNotice(noticeText);
       return;
     }
+    await clearBrowserTaskNotice(profile, comboTaskNoticeUrlRef.current);
+    comboTaskNoticeUrlRef.current = null;
     setError(session.message || t("Codex OAuth 登录失败"));
   }
 
   async function openCodexLoginWindow(profile: ChatGptProfileView, url: string) {
+    setNotice(t("正在浏览器中打开 Codex OAuth：{name}", { name: profileDisplayLabel(profile, t) }));
     const result = await requireDesktop().openUrlInChatGpt(toDesktopProfile(profile), url);
     if (!result.opened) {
+      await clearBrowserTaskNotice(profile, comboTaskNoticeUrlRef.current);
       setError(result.error ?? t("Codex 授权窗口打开失败"));
+      return;
     }
+    comboTaskNoticeUrlRef.current = url;
+    await showBrowserTaskNotice(
+      profile,
+      t("请在网页中完成 Codex OAuth 授权，Squirrel Switch 正在等待授权结果"),
+      { preferredUrl: url },
+    );
   }
 
   async function exportBackup() {
@@ -490,6 +699,7 @@ export function ChatGptView({
       return;
     }
     await run("export-chatgpt-backup", async () => {
+      setNotice(t("正在通过浏览器导出 ChatGPT 备份：{count} 个会话", { count: selectedProfiles.length }));
       const result = await requireDesktop().exportChatGptBackup({
         profiles: selectedProfiles.map(toDesktopProfile),
         password: backupPassword,
@@ -517,6 +727,7 @@ export function ChatGptView({
       return;
     }
     await run("import-chatgpt-backup", async () => {
+      setNotice(t("正在通过浏览器导入 ChatGPT 备份"));
       const result = await requireDesktop().importChatGptBackup({
         backupText: await file.text(),
         password: importPassword,
@@ -591,21 +802,19 @@ export function ChatGptView({
 
           <ProfilesTable
             profiles={profiles}
+            appConfigs={appConfigs}
             busy={busy}
             editingProfileId={editingProfileId}
             editingProfileName={editingProfileName}
             locale={locale}
             onEditingProfileNameChange={setEditingProfileName}
             onOpen={(profile) => void run(`open-${profile.id}`, () => openProfile(profile))}
-            onCheckStatus={(profile) =>
-              void run(`check-chatgpt-${profile.id}`, async () => {
-                await checkProfileStatusManually(profile);
-              })
-            }
+            onBindCodex={(profile) => void bindCodexToProfile(profile)}
             onStartRename={beginRenameProfile}
             onSaveRename={(profile) => void saveRenamedProfile(profile)}
             onCancelRename={cancelRenameProfile}
             onDelete={(profile) => void deleteProfile(profile)}
+            onOpenAppSync={setAppSyncProfile}
             onRefreshAll={() => void checkAllProfiles()}
           />
         </>
@@ -656,6 +865,18 @@ export function ChatGptView({
           {t("ChatGPT cookie、localStorage 和备份均属于敏感登录态；Squirrel Switch 不会展示、复制或记录明文内容。")}
         </span>
       </div>
+
+      {appSyncProfile && (
+        <ChatGptAppSyncDialog
+          configs={appConfigs}
+          locale={locale}
+          profile={appSyncProfile}
+          onChanged={(config) => setAppConfigState((current) => replaceAppConfig(current, config))}
+          onClose={() => setAppSyncProfile(null)}
+          onError={(message) => setError(message || null)}
+          onNotice={setNotice}
+        />
+      )}
     </div>
   );
 }
@@ -711,10 +932,10 @@ function AddSessionPanel({
         {comboProfile && (
           <div className="comboBox">
             <strong>{profileDisplayLabel(comboProfile, t)}</strong>
-            <span>{comboLoginSession?.message ?? t("等待 ChatGPT 登录完成，随后会自动打开 Codex OAuth")}</span>
+            <span>{comboLoginSession?.message ?? t("等待 ChatGPT 登录完成后，在同一浏览器继续 Codex")}</span>
             <button disabled={busy === "combo-codex-login"} onClick={onContinueCombo}>
               <LogIn size={14} />
-              {t("手动打开 Codex OAuth")}
+              {t("继续 Codex OAuth")}
             </button>
             <small>{t("若浏览器询问是否打开 Codex.app，请选择取消；Squirrel Switch 会自动导入登录态。")}</small>
           </div>
@@ -879,190 +1100,6 @@ function BackupPanel({
   );
 }
 
-function ProfilesTable({
-  profiles,
-  busy,
-  editingProfileId,
-  editingProfileName,
-  locale,
-  onEditingProfileNameChange,
-  onOpen,
-  onCheckStatus,
-  onStartRename,
-  onSaveRename,
-  onCancelRename,
-  onDelete,
-  onRefreshAll,
-}: {
-  profiles: ChatGptProfileView[];
-  busy: Busy;
-  editingProfileId: string | null;
-  editingProfileName: string;
-  locale: AppLocale;
-  onEditingProfileNameChange: (value: string) => void;
-  onOpen: (profile: ChatGptProfileView) => void;
-  onCheckStatus: (profile: ChatGptProfileView) => void;
-  onStartRename: (profile: ChatGptProfileView) => void;
-  onSaveRename: (profile: ChatGptProfileView) => void;
-  onCancelRename: () => void;
-  onDelete: (profile: ChatGptProfileView) => void;
-  onRefreshAll: () => void;
-}) {
-  const { t } = useI18n();
-  return (
-    <section className="card">
-      <header className="cardHeader">
-        <div className="left">
-          <h2>{t("ChatGPT 会话")}</h2>
-          <span className="count">{t("{count} 个", { count: profiles.length })}</span>
-        </div>
-        <div className="actions">
-          <button className="primary" disabled={profiles.length === 0 || Boolean(busy)} onClick={onRefreshAll}>
-            <RefreshCcw size={14} />
-            {t("刷新全部")}
-          </button>
-        </div>
-      </header>
-      <div className="cardBody tight">
-        {profiles.length === 0 ? (
-          <div className="empty">{t("暂无 ChatGPT 会话")}</div>
-        ) : (
-          <div className="tableWrap">
-            <table className="table chatgptProfilesTable">
-              <thead>
-                <tr>
-                  <th>{t("状态")}</th>
-                  <th>{t("账号")}</th>
-                  <th>{t("计划")}</th>
-                  <th>{t("会员到期")}</th>
-                  <th>{t("浏览器")}</th>
-                  <th>{t("绑定 Codex")}</th>
-                  <th>{t("上次检查")}</th>
-                  <th style={{ textAlign: "right" }}>{t("操作")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {profiles.map((profile) => {
-                  return (
-                    <tr key={profile.id}>
-                      <td>
-                        <SessionPill profile={profile} />
-                      </td>
-                      <td>
-                        {editingProfileId === profile.id ? (
-                          <span className="rename">
-                            <input
-                              autoFocus
-                              value={editingProfileName}
-                              onChange={(event) => onEditingProfileNameChange(event.target.value)}
-                            />
-                            <button onClick={() => onSaveRename(profile)}>{t("保存")}</button>
-                            <button className="ghost" onClick={onCancelRename}>
-                              {t("取消")}
-                            </button>
-                          </span>
-                        ) : (
-                          <AccountCell profile={profile} />
-                        )}
-                      </td>
-                      <td>{formatPlan(profile, locale)}</td>
-                      <td>{formatSubscription(profile, locale)}</td>
-                      <td>{formatBrowser(profile, t)}</td>
-                      <td>
-                        <LinkedCodexCell profile={profile} />
-                      </td>
-                      <td>{formatTime(profile.lastCheckedAt, locale)}</td>
-                      <td>
-                        <div className="rowActions">
-                          <IconButton title={t("打开 ChatGPT")} disabled={Boolean(busy)} onClick={() => onOpen(profile)}>
-                            <MessageSquare size={14} />
-                          </IconButton>
-                          <IconButton title={t("检查登录状态")} disabled={Boolean(busy)} onClick={() => onCheckStatus(profile)}>
-                            <RefreshCcw size={14} />
-                          </IconButton>
-                          <IconButton title={t("编辑备注")} disabled={Boolean(busy)} onClick={() => onStartRename(profile)}>
-                            <Pencil size={14} />
-                          </IconButton>
-                          <IconButton className="danger" title={t("删除")} disabled={Boolean(busy)} onClick={() => onDelete(profile)}>
-                            <Trash2 size={14} />
-                          </IconButton>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function SessionPill({ profile }: { profile: ChatGptProfileView }) {
-  const { t } = useI18n();
-  if (profile.sessionStatus === "available") {
-    return <span className="pill active">{t("可用")}</span>;
-  }
-  if (profile.sessionStatus === "invalid") {
-    return <span className="pill danger" title={profile.lastCheckError ?? undefined}>{t("失效")}</span>;
-  }
-  if (profile.sessionStatus === "reauth_required") {
-    return <span className="pill warn" title={profile.lastCheckError ?? undefined}>{t("需验证")}</span>;
-  }
-  return <span className="pill warn">{t("未检查")}</span>;
-}
-
-function AccountCell({ profile }: { profile: ChatGptProfileView }) {
-  const { t } = useI18n();
-  const primary = profile.accountEmail ?? profile.accountName ?? profile.linkedCodexEmail;
-  return (
-    <span className="identity">
-      <span className="identityNameRow">
-        <strong>{profile.displayName}</strong>
-      </span>
-      <span className="identityMetaRow">
-        <small>{primary ?? t("未识别")}</small>
-      </span>
-    </span>
-  );
-}
-
-function IconButton({
-  className,
-  title,
-  "aria-label": ariaLabel,
-  ...props
-}: React.ButtonHTMLAttributes<HTMLButtonElement>) {
-  const label = ariaLabel ?? (typeof title === "string" ? title : undefined);
-  return (
-    <button
-      className={`iconButton ${className ?? ""}`.trim()}
-      title={title}
-      aria-label={label}
-      data-tooltip={label}
-      {...props}
-    />
-  );
-}
-
-function LinkedCodexCell({ profile }: { profile: ChatGptProfileView }) {
-  const { t } = useI18n();
-  const name = profile.linkedCodexAccountName ?? profile.linkedCodexEmail;
-  if (!profile.linkedCodexAccountId && !name) {
-    return <span className="pill">{t("未绑定")}</span>;
-  }
-  return (
-    <span className="identity">
-      <strong>{name ?? t("已绑定")}</strong>
-      {profile.linkedCodexEmail && name !== profile.linkedCodexEmail ? (
-        <small>{profile.linkedCodexEmail}</small>
-      ) : null}
-    </span>
-  );
-}
-
 function toDesktopProfile(profile: ChatGptProfileView): ChatGptDesktopProfileInput {
   return {
     id: profile.id,
@@ -1089,6 +1126,42 @@ function downloadJson(payload: unknown, filename: string) {
   URL.revokeObjectURL(url);
 }
 
+function replaceProfile(
+  profiles: ChatGptProfileView[],
+  updated: ChatGptProfileView,
+): ChatGptProfileView[] {
+  return profiles.map((profile) => (profile.id === updated.id ? updated : profile));
+}
+
+function findCodexAccountByEmail(
+  accounts: AccountView[],
+  email: string | null,
+): AccountView | null {
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail) {
+    return null;
+  }
+  return accounts.find((account) => normalizeEmail(account.email) === normalizedEmail) ?? null;
+}
+
+function normalizeEmail(email: string | null | undefined): string | null {
+  const normalized = email?.trim().toLowerCase();
+  return normalized || null;
+}
+
+function replaceAppConfig(
+  state: ChatGptAppConfigManagementState | null,
+  config: ChatGptAppConfigView,
+): ChatGptAppConfigManagementState | null {
+  if (!state) {
+    return state;
+  }
+  return {
+    ...state,
+    configs: state.configs.map((item) => (item.id === config.id ? config : item)),
+  };
+}
+
 function formatTime(value: number | null | undefined, locale: AppLocale) {
   if (!value) {
     return locale === "en-US" ? "Never" : "从未";
@@ -1099,44 +1172,6 @@ function formatTime(value: number | null | undefined, locale: AppLocale) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(value * 1000));
-}
-
-function formatPlan(profile: ChatGptProfileView, locale: AppLocale) {
-  return (
-    readablePlanLabel(profile.planType, profile.planLabel) ??
-    (locale === "en-US" ? "Unavailable" : "会员信息不可用")
-  );
-}
-
-function formatSubscription(profile: ChatGptProfileView, locale: AppLocale) {
-  if (profile.subscriptionRenewsAt) {
-    return formatTime(profile.subscriptionRenewsAt, locale);
-  }
-  if (profile.subscriptionExpiresAt) {
-    return formatTime(profile.subscriptionExpiresAt, locale);
-  }
-  return locale === "en-US" ? "Unavailable" : "会员信息不可用";
-}
-
-function formatBrowser(profile: ChatGptProfileView, t: (text: string) => string): string {
-  if (profile.browserKind === "edge") {
-    return "Edge";
-  }
-  if (profile.browserKind === "custom") {
-    return t("自定义");
-  }
-  return "Chrome";
-}
-
-function profileDisplayLabel(profile: ChatGptProfileView, t: (text: string) => string): string {
-  return profile.accountEmail ?? profile.accountName ?? profile.linkedCodexEmail ?? profile.displayName ?? t("未识别");
-}
-
-function statusLabel(status: ChatGptAccountStatusResult["status"], t: (text: string) => string): string {
-  if (status === "invalid") return t("失效");
-  if (status === "reauth_required") return t("需验证");
-  if (status === "unchecked") return t("未检查");
-  return t("会员信息不可用");
 }
 
 function errorMessage(error: unknown) {
@@ -1165,7 +1200,7 @@ function isCompleteChatGptStatus(status: ChatGptAccountStatusResult): boolean {
   if (!planLabel) {
     return false;
   }
-  if (planLabel.toLowerCase() === "free") {
+  if (isNonExpiringChatGptStatus(status)) {
     return true;
   }
   return Boolean(status.subscriptionExpiresAt || status.subscriptionRenewsAt);
@@ -1179,22 +1214,22 @@ function hasChatGptLoginIdentity(status: ChatGptAccountStatusResult): boolean {
   return status.status === "available" && Boolean(status.accountEmail || status.accountId);
 }
 
-function readablePlanLabel(planType: string | null, planLabel: string | null): string | null {
-  const normalizedType = planType?.trim().toLowerCase() ?? null;
-  if (normalizedType) {
-    if (normalizedType === "plus") return "Plus";
-    if (normalizedType === "pro") return "Pro";
-    if (normalizedType === "team") return "Team";
-    if (normalizedType === "enterprise") return "Enterprise";
-    if (normalizedType === "free") return "Free";
-  }
-  const label = planLabel?.trim();
-  if (!label || /^chatgpt[a-z0-9_-]*plan$/i.test(label)) {
-    return null;
-  }
-  return label;
+function statusToProfileFields(
+  status: ChatGptAccountStatusResult,
+): Pick<ChatGptProfileView, "sessionStatus" | "accountEmail" | "accountName" | "accountId" | "planType" | "planLabel"> {
+  return {
+    sessionStatus: status.status,
+    accountEmail: status.accountEmail,
+    accountName: status.accountName,
+    accountId: status.accountId,
+    planType: status.planType,
+    planLabel: status.planLabel,
+  };
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolveSleep) => window.setTimeout(resolveSleep, ms));
+function isNonExpiringChatGptStatus(status: ChatGptAccountStatusResult): boolean {
+  const values = [status.planType, readablePlanLabel(status.planType, status.planLabel)]
+    .map((value) => value?.trim().toLowerCase())
+    .filter((value): value is string => Boolean(value));
+  return values.some((value) => value === "free" || value === "guest");
 }

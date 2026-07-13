@@ -1,6 +1,8 @@
 import type {
   ChatGptDesktopProfileInput,
   ChatGptAccountStatusResult,
+  ChatGptAppConfigureResult,
+  ChatGptAppSyncCheckResult,
   ChatGptExportBackupResult,
   ChatGptImportBackupResult,
   ChatGptSessionSummary,
@@ -15,8 +17,17 @@ declare global {
     opened: boolean;
   }
 
+  interface CloseDesktopWindowResult extends DesktopActionResult {
+    closed: boolean;
+  }
+
   interface ClearChatGptSessionResult extends DesktopActionResult {
     cleared: boolean;
+  }
+
+  interface ChatGptTaskNoticeResult extends DesktopActionResult {
+    cleared?: boolean;
+    shown?: boolean;
   }
 
   interface ChatGptSessionSummaryResult extends DesktopActionResult {
@@ -25,6 +36,14 @@ declare global {
 
   interface ChatGptAccountStatusDesktopResult extends DesktopActionResult {
     status: ChatGptAccountStatusResult | null;
+  }
+
+  interface ChatGptAppSyncCheckDesktopResult extends DesktopActionResult {
+    result: ChatGptAppSyncCheckResult | null;
+  }
+
+  interface ChatGptAppConfigureDesktopResult extends DesktopActionResult {
+    result: ChatGptAppConfigureResult | null;
   }
 
   interface ChatGptExportDesktopResult extends DesktopActionResult {
@@ -38,10 +57,21 @@ declare global {
   interface SquirrelSwitchDesktopApi {
     openLoginUrl: (sessionId: string, url: string) => Promise<OpenDesktopWindowResult>;
     openChatGpt: (profile: ChatGptDesktopProfileInput) => Promise<OpenDesktopWindowResult>;
+    closeChatGpt: (profile: ChatGptDesktopProfileInput) => Promise<CloseDesktopWindowResult>;
     openUrlInChatGpt: (
       profile: ChatGptDesktopProfileInput,
       url: string,
     ) => Promise<OpenDesktopWindowResult>;
+    showChatGptTaskNotice: (input: {
+      blocking?: boolean;
+      message: string;
+      preferredUrl?: string;
+      profile: ChatGptDesktopProfileInput;
+    }) => Promise<ChatGptTaskNoticeResult>;
+    clearChatGptTaskNotice: (input: {
+      preferredUrl?: string;
+      profile: ChatGptDesktopProfileInput;
+    }) => Promise<ChatGptTaskNoticeResult>;
     clearChatGptSession: (
       profile: ChatGptDesktopProfileInput,
     ) => Promise<ClearChatGptSessionResult>;
@@ -51,6 +81,12 @@ declare global {
     getChatGptAccountStatus: (
       input: ChatGptDesktopProfileInput & { accountId: string | null; closeAfterCheck?: boolean },
     ) => Promise<ChatGptAccountStatusDesktopResult>;
+    checkChatGptAppSync: (
+      input: { profile: ChatGptDesktopProfileInput; requireActive?: boolean },
+    ) => Promise<ChatGptAppSyncCheckDesktopResult>;
+    configureChatGptAppSync: (
+      input: { profile: ChatGptDesktopProfileInput; configId: string },
+    ) => Promise<ChatGptAppConfigureDesktopResult>;
     exportChatGptBackup: (payload: {
       profiles: ChatGptDesktopProfileInput[];
       password: string;

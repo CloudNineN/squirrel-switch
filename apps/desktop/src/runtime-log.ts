@@ -1,13 +1,14 @@
-import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { appDataDir, ensureAppDataDir } from "./paths.js";
-import { nowSeconds } from "./time.js";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
-export const runtimeLogPath = `${appDataDir}/runtime.log`;
+const appDataDir = join(homedir(), ".squirrel-switch");
+const runtimeLogPath = join(appDataDir, "runtime.log");
 const maxRuntimeLogEntries = 2000;
 const maxRuntimeLogAgeSeconds = 30 * 24 * 60 * 60;
 
-export interface RuntimeLogEntry {
+interface RuntimeLogEntry {
   id: string;
   time: number;
   level: "info" | "warn" | "error";
@@ -15,58 +16,26 @@ export interface RuntimeLogEntry {
   message: string;
 }
 
-export interface RuntimeLogPage {
-  logs: RuntimeLogEntry[];
-  page: number;
-  pageSize: number;
-  total: number;
-  totalPages: number;
-}
-
-export async function writeRuntimeLog(
+export async function writeDesktopRuntimeLog(
   level: RuntimeLogEntry["level"],
   scope: string,
   message: string,
 ): Promise<void> {
-  await ensureAppDataDir();
   const entry: RuntimeLogEntry = {
     id: randomUUID(),
-    time: nowSeconds(),
+    time: Math.floor(Date.now() / 1000),
     level,
     scope,
     message: redactSensitiveText(message),
   };
+  await mkdir(appDataDir, { recursive: true, mode: 0o700 }).catch(() => undefined);
   await appendFile(runtimeLogPath, `${JSON.stringify(entry)}\n`, "utf8").catch(() => undefined);
   await pruneRuntimeLog().catch(() => undefined);
 }
 
-export async function readRuntimeLogs(limit = 300): Promise<RuntimeLogEntry[]> {
-  const logs = await readAllRuntimeLogs();
-  return logs.slice(0, Math.max(1, Math.min(limit, 1000)));
-}
-
-export async function readRuntimeLogPage(page = 1, pageSize = 50): Promise<RuntimeLogPage> {
-  const logs = await readAllRuntimeLogs();
-  const normalizedPageSize = Math.max(10, Math.min(pageSize, 100));
-  const totalPages = Math.max(1, Math.ceil(logs.length / normalizedPageSize));
-  const normalizedPage = Math.max(1, Math.min(page, totalPages));
-  const start = (normalizedPage - 1) * normalizedPageSize;
-  return {
-    logs: logs.slice(start, start + normalizedPageSize),
-    page: normalizedPage,
-    pageSize: normalizedPageSize,
-    total: logs.length,
-    totalPages,
-  };
-}
-
-async function readAllRuntimeLogs(): Promise<RuntimeLogEntry[]> {
-  return (await readRuntimeLogEntries()).reverse();
-}
-
 async function pruneRuntimeLog(): Promise<void> {
   const entries = await readRuntimeLogEntries();
-  const minTime = nowSeconds() - maxRuntimeLogAgeSeconds;
+  const minTime = Math.floor(Date.now() / 1000) - maxRuntimeLogAgeSeconds;
   const keptEntries = entries
     .filter((entry) => entry.time >= minTime)
     .slice(-maxRuntimeLogEntries);
@@ -82,7 +51,6 @@ async function readRuntimeLogEntries(): Promise<RuntimeLogEntry[]> {
   if (!trimmed) {
     return [];
   }
-
   return trimmed
     .split("\n")
     .filter(Boolean)

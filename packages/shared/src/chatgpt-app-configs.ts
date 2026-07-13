@@ -24,6 +24,8 @@ export interface ChatGptAppSyncStateView {
   linkedCodexEmail: string | null;
   status: ChatGptAppSyncStatus;
   syncedConfigHash: string | null;
+  remoteConnectorId: string | null;
+  remoteLinkId: string | null;
   lastSyncedAt: number | null;
   lastCheckedAt: number | null;
   error: string | null;
@@ -40,6 +42,7 @@ export interface ChatGptAppConfigView {
   mcpServerUrl: string | null;
   authType: ChatGptAppAuthType;
   authNote: string | null;
+  hasOAuthPassword: boolean;
   scopeType: ChatGptAppScopeType;
   targetProfileIds: string[];
   enabled: boolean;
@@ -63,6 +66,8 @@ export interface UpsertChatGptAppConfigPayload {
   mcpServerUrl?: string | null;
   authType: ChatGptAppAuthType;
   authNote?: string | null;
+  oauthPassword?: string | null;
+  clearOAuthPassword?: boolean;
   scopeType: ChatGptAppScopeType;
   targetProfileIds?: string[];
   enabled: boolean;
@@ -71,4 +76,31 @@ export interface UpsertChatGptAppConfigPayload {
 export interface UpdateChatGptAppSyncStatusPayload {
   status: Extract<ChatGptAppSyncStatus, "pending" | "synced" | "failed" | "skipped">;
   error?: string | null;
+  remoteConnectorId?: string | null;
+  remoteLinkId?: string | null;
+}
+
+export interface ChatGptAppConnectorLinkView {
+  id: string | null;
+  name: string | null;
+  connectorId: string | null;
+  connectorName: string | null;
+  connectorType: string | null;
+  authStatus: string | null;
+  authType: string | null;
+  visibility: string | null;
+  baseUrl: string | null;
+  service: string | null;
+}
+
+export interface ChatGptAppSyncCheckResult {
+  checkedAt: number;
+  links: ChatGptAppConnectorLinkView[];
+}
+
+export interface ChatGptAppConfigureResult {
+  configured: boolean;
+  checkedAt: number;
+  message: string | null;
+  links: ChatGptAppConnectorLinkView[];
 }

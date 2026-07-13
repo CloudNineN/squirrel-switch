@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import type { FastifyInstance } from "fastify";
 import { authJsonPath, databasePath, defaultCodexHome } from "../lib/paths.js";
-import { getEffectiveCodexHome, getSetting } from "../lib/db.js";
+import { getEffectiveCodexHome } from "../lib/db.js";
 import { resolveCodexBinary } from "../lib/codex-binary.js";
 import { isKeychainAvailable } from "../lib/keychain.js";
 import { readRuntimeLogPage, runtimeLogPath } from "../lib/runtime-log.js";
@@ -9,7 +9,7 @@ import { readRuntimeLogPage, runtimeLogPath } from "../lib/runtime-log.js";
 export async function runtimeRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/runtime/status", async () => {
     const codexHome = getEffectiveCodexHome(defaultCodexHome());
-    const codexBinaryPath = await resolveCodexBinary(getSetting("codexBinaryPath"));
+    const codexBinaryPath = await resolveCodexBinary();
     return {
       data: {
         codexHome,

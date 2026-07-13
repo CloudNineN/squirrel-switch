@@ -3,44 +3,34 @@
   gap: 16px;
 }
 
-.chatgptAppsLayout {
-  display: grid;
-  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
-  gap: 16px;
+.appConfigTable {
+  min-width: 1040px;
 }
 
-.appConfigItems {
-  display: grid;
-  gap: 8px;
-  padding: 12px;
-}
-
-.appConfigItem {
-  height: auto;
-  min-height: 86px;
-  padding: 12px;
-  display: grid;
-  align-content: start;
-  justify-items: stretch;
-  gap: 6px;
-  text-align: left;
-  border-radius: var(--radius-md);
-}
-
-.appConfigItem.active {
-  border-color: var(--text);
-  background: var(--surface-muted);
-}
-
-.appConfigItem strong,
-.appConfigItem small {
+.appConfigTable .identity,
+.appSyncTable .identity {
   min-width: 0;
+}
+
+.appConfigTable .identity strong,
+.appConfigTable .identity small,
+.appSyncTable .identity strong,
+.appSyncTable .identity small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.appConfigItem small,
+.appConfigUrl {
+  max-width: 260px;
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .statusSummary {
   color: var(--text-muted);
   font-size: 12px;
@@ -50,6 +40,33 @@
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.modalOverlay .modal.appConfigModal {
+  width: min(920px, 100%);
+}
+
+.modalOverlay .modal.appConfigModal .cardBody {
+  max-height: calc(100vh - 132px);
+  overflow: auto;
+}
+
+.modalOverlay .modal.appSyncDialog .cardBody {
+  max-height: calc(100vh - 132px);
+  overflow: auto;
+}
+
+.modalOverlay .modal.appConfigModal .cardBody {
+  max-height: calc(100vh - 190px);
+}
+
+.modalFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
 }
 
 .appConfigForm {
@@ -63,6 +80,11 @@
   gap: 6px;
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+.appConfigForm label small {
+  color: var(--text-muted);
+  line-height: 1.4;
 }
 
 .appConfigForm label.full {
@@ -103,16 +125,45 @@
   color: var(--text);
 }
 
-.appSyncTable {
-  min-width: 920px;
+.modalOverlay .modal.appSyncDialog .tableWrap {
+  overflow-x: hidden;
 }
 
-.appSyncTable .pill {
-  border-radius: 999px;
-  padding: 4px 8px;
-  font-size: 12px;
-  background: var(--surface-muted);
-  color: var(--text-secondary);
+.modalOverlay .table.appSyncTable {
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.modalOverlay .table.appSyncTable th:nth-child(1),
+.modalOverlay .table.appSyncTable td:nth-child(1) {
+  width: 30%;
+}
+
+.modalOverlay .table.appSyncTable th:nth-child(2),
+.modalOverlay .table.appSyncTable td:nth-child(2) {
+  width: 110px;
+}
+
+.modalOverlay .table.appSyncTable th:nth-child(3),
+.modalOverlay .table.appSyncTable td:nth-child(3) {
+  width: 100px;
+}
+
+.modalOverlay .table.appSyncTable th:nth-child(4),
+.modalOverlay .table.appSyncTable td:nth-child(4) {
+  width: 120px;
+}
+
+.modalOverlay .table.appSyncTable th:nth-child(6),
+.modalOverlay .table.appSyncTable td:nth-child(6) {
+  width: 88px;
+}
+
+.modalOverlay .table.appSyncTable td:nth-child(5) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .appSyncTable .pill.synced {
@@ -135,20 +186,35 @@
   color: var(--text-secondary);
 }
 
-.rowActions {
-  display: inline-flex;
-  justify-content: flex-end;
-  gap: 6px;
+.profileAppSyncButton {
+  height: 28px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
-.rowActions button {
-  width: 30px;
-  height: 30px;
-  padding: 0;
+.profileAppSyncButton.active {
+  background: var(--success-bg);
+  border-color: #bbf7d0;
+  color: var(--success);
+}
+
+.profileAppSyncButton.warn {
+  background: var(--warning-bg);
+  border-color: #fde68a;
+  color: var(--warning);
+}
+
+.profileAppSyncButton.danger {
+  background: var(--danger-bg);
+  border-color: #fecaca;
+  color: var(--danger);
 }
 
 @media (max-width: 1160px) {
-  .chatgptAppsLayout {
+  .appConfigForm {
     grid-template-columns: 1fr;
   }
 }

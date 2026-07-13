@@ -185,7 +185,7 @@ function createZip(source, target) {
     run("tar", ["-a", "-cf", target, "-C", dirname(source), basename(source)]);
     return;
   }
-  run("ditto", ["-c", "-k", "--keepParent", source, target]);
+  run("ditto", ["-c", "-k", "--norsrc", "--keepParent", source, target]);
 }
 
 async function copySharedPackage() {
@@ -213,18 +213,22 @@ async function prepareWindowsServerDependencies() {
   const serverBundleDir = join(bundledAppsDir, "server");
   runPnpm(
     [
+      "--ignore-workspace",
       "install",
       "--prod",
-      "--ignore-workspace",
       "--ignore-scripts",
       "--lockfile=false",
+      "--frozen-lockfile=false",
       "--config.confirmModulesPurge=false",
+      "--config.recursive-install=false",
       "--config.node-linker=hoisted",
     ],
     {
       cwd: serverBundleDir,
       env: {
         ...process.env,
+        CI: "true",
+        npm_config_confirm_modules_purge: "false",
         npm_config_platform: "win32",
         npm_config_arch: "x64",
         npm_config_target_platform: "win32",

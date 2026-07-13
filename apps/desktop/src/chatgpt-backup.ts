@@ -7,15 +7,17 @@ import {
   randomUUID,
   scrypt,
 } from "node:crypto";
-import { appendFile, mkdir } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import {
   clearChatGptBrowserProfile,
   defaultBrowserProfileDir,
   exportChatGptBrowserSession,
   importChatGptBrowserSession,
 } from "./chatgpt-browser.js";
+import {
+  clearChatGptBrowserTaskNotice,
+  showChatGptBrowserTaskNotice,
+} from "./chatgpt-browser-task-notice.js";
+import { writeDesktopRuntimeLog } from "./runtime-log.js";
 import type {
   ChatGptBrowserKind,
   ChatGptDesktopProfile,
@@ -24,8 +26,6 @@ import type {
 } from "./chatgpt-browser.js";
 
 export type { ChatGptDesktopProfile } from "./chatgpt-browser.js";
-
-const runtimeLogPath = join(homedir(), ".squirrel-switch", "runtime.log");
 
 interface ChatGptExportRequest {
   profiles: ChatGptDesktopProfile[];
@@ -102,26 +102,34 @@ export async function exportChatGptBackup(request: ChatGptExportRequest) {
   }> = [];
 
   for (const profile of request.profiles) {
-    const snapshot = await exportChatGptBrowserSession(profile);
-    const cookies = snapshot.cookies;
-    const originStorage = snapshot.originStorage;
-    const payloadProfile: ChatGptBackupPayloadProfile = {
-      displayName: profile.displayName,
-      accountEmailHint: profile.accountEmail,
-      planLabelHint: profile.planLabel,
-      linkedCodexEmailHint: profile.linkedCodexEmail,
-      cookies,
-      originStorage,
-      exportedAt,
-    };
-    payloadProfiles.push(payloadProfile);
-    summaries.push({
-      id: profile.id,
-      displayName: profile.displayName,
-      sessionHash: hashBackupProfile(payloadProfile),
-      cookieCount: cookies.length,
-      originStorageCount: originStorage.length,
+    await showChatGptBrowserTaskNotice(profile, {
+      message: "Squirrel Switch 正在导出 ChatGPT 备份，请暂时不要关闭此窗口",
+      blocking: true,
     });
+    try {
+      const snapshot = await exportChatGptBrowserSession(profile);
+      const cookies = snapshot.cookies;
+      const originStorage = snapshot.originStorage;
+      const payloadProfile: ChatGptBackupPayloadProfile = {
+        displayName: profile.displayName,
+        accountEmailHint: profile.accountEmail,
+        planLabelHint: profile.planLabel,
+        linkedCodexEmailHint: profile.linkedCodexEmail,
+        cookies,
+        originStorage,
+        exportedAt,
+      };
+      payloadProfiles.push(payloadProfile);
+      summaries.push({
+        id: profile.id,
+        displayName: profile.displayName,
+        sessionHash: hashBackupProfile(payloadProfile),
+        cookieCount: cookies.length,
+        originStorageCount: originStorage.length,
+      });
+    } finally {
+      await clearChatGptBrowserTaskNotice(profile);
+    }
   }
 
   return {
@@ -151,6 +159,10 @@ export async function importChatGptBackup(request: ChatGptImportRequest) {
       browserProfileDir,
     };
     const importLabel = `${index + 1}/${payload.profiles.length}`;
+    await showChatGptBrowserTaskNotice(importedProfile, {
+      message: `Squirrel Switch 正在导入 ChatGPT 备份会话 ${importLabel}，请暂时不要关闭此窗口`,
+      blocking: true,
+    });
     try {
       await writeDesktopRuntimeLog("info", "chatgpt", `写入 ChatGPT 备份会话 ${importLabel}`);
       const { failedOriginStorage } = await importChatGptBrowserSession(importedProfile, {
@@ -186,6 +198,8 @@ export async function importChatGptBackup(request: ChatGptImportRequest) {
         "chatgpt",
         `ChatGPT 备份会话 ${importLabel} 写入失败：${errorMessage(error)}`,
       );
+    } finally {
+      await clearChatGptBrowserTaskNotice(importedProfile);
     }
   }
   if (profiles.length === 0 && failed > 0) {
@@ -506,31 +520,6 @@ function isTrustedLoginHost(url: URL): boolean {
   );
 }
 
-async function writeDesktopRuntimeLog(
-  level: "info" | "warn" | "error",
-  scope: string,
-  message: string,
-): Promise<void> {
-  const entry = {
-    id: randomUUID(),
-    time: Math.floor(Date.now() / 1000),
-    level,
-    scope,
-    message: redactSensitiveText(message),
-  };
-  await mkdir(join(homedir(), ".squirrel-switch"), { recursive: true, mode: 0o700 }).catch(
-    () => undefined,
-  );
-  await appendFile(runtimeLogPath, `${JSON.stringify(entry)}\n`, "utf8").catch(() => undefined);
-}
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function redactSensitiveText(value: string): string {
-  return value
-    .replace(/(access_token|refresh_token|id_token|OPENAI_ACCESS_TOKEN)=?[^,\s]+/gi, "$1=[redacted]")
-    .replace(/(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|api_key)=?[^,\s]+/gi, "$1=[redacted]")
-    .replace(/Bearer\s+[A-Za-z0-9._-]+/g, "Bearer [redacted]");
 }

@@ -20,6 +20,12 @@ export interface ChatGptApiReadResult {
   forbidden?: true;
 }
 
+interface ChatGptPageSessionState {
+  sessionExpired?: boolean;
+  loginRequired?: boolean;
+  hasAccessToken?: boolean | null;
+}
+
 export function firstStringByKeys(candidates: unknown[], keys: string[]): string | null {
   for (const candidate of candidates) {
     const value = deepFindByKeys(candidate, keys);
@@ -96,7 +102,14 @@ export function normalizeChatGptAccountStatus(
   const authSession = isRecord(value.authSession) ? value.authSession : null;
   const accountCheck = isRecord(value.accountCheck) ? value.accountCheck : null;
   const subscription = isRecord(value.subscription) ? value.subscription : null;
+  const pageSession = isRecord(value.pageSession) ? pageSessionState(value.pageSession) : null;
   const resolvedAccountId = readString(value.resolvedAccountId);
+  if (pageSession?.sessionExpired) {
+    return guestChatGptAccountStatus("reauth_required", checkedAt, "ChatGPT 会话已过期，请重新登录");
+  }
+  if (pageSession?.loginRequired && pageSession.hasAccessToken === false) {
+    return guestChatGptAccountStatus("reauth_required", checkedAt, "ChatGPT 未登录，请重新登录");
+  }
   const statusResponses = [
     authSession,
     accountCheck,
@@ -203,6 +216,11 @@ export function normalizeChatGptAccountStatus(
 
   const normalizedPlanType = planType ?? normalizePlanType(planLabel);
   const normalizedPlanLabel = planLabel ?? friendlyPlanLabel(normalizedPlanType);
+  const hasNonExpiringPlan = isNonExpiringPlan(normalizedPlanType, normalizedPlanLabel);
+  const hasAuthAccessToken = hasAccessToken(authSession?.json);
+  if (!hasAuthAccessToken && normalizedPlanType === "guest") {
+    return guestChatGptAccountStatus("reauth_required", checkedAt, "ChatGPT 未登录，请重新登录");
+  }
 
   return {
     status: "available",
@@ -211,10 +229,22 @@ export function normalizeChatGptAccountStatus(
     accountId,
     planType: normalizedPlanType,
     planLabel: normalizedPlanLabel,
-    subscriptionExpiresAt,
-    subscriptionRenewsAt,
+    subscriptionExpiresAt: hasNonExpiringPlan ? null : subscriptionExpiresAt,
+    subscriptionRenewsAt: hasNonExpiringPlan ? null : subscriptionRenewsAt,
     checkedAt,
     error: normalizedPlanLabel || accountEmail ? null : "会员信息不可用",
+  };
+}
+
+function guestChatGptAccountStatus(
+  status: Exclude<ChatGptSessionStatus, "available" | "unchecked">,
+  checkedAt: number,
+  error: string,
+): ChatGptAccountStatus {
+  return {
+    ...emptyChatGptAccountStatus(status, checkedAt, error),
+    planType: "guest",
+    planLabel: "guest",
   };
 }
 
@@ -390,6 +420,29 @@ function friendlyPlanLabel(planType: string | null): string | null {
   if (planType === "enterprise") return "Enterprise";
   if (planType === "free") return "Free";
   return planType;
+}
+
+function isNonExpiringPlan(planType: string | null, planLabel: string | null): boolean {
+  const values = [planType, planLabel]
+    .map((value) => value?.trim().toLowerCase())
+    .filter((value): value is string => Boolean(value));
+  return values.some((value) => value === "free" || value === "guest");
+}
+
+function pageSessionState(value: Record<string, unknown>): ChatGptPageSessionState {
+  return {
+    sessionExpired: value.sessionExpired === true,
+    loginRequired: value.loginRequired === true,
+    hasAccessToken: typeof value.hasAccessToken === "boolean" ? value.hasAccessToken : null,
+  };
+}
+
+function hasAccessToken(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const accessToken = value.accessToken;
+  return typeof accessToken === "string" && accessToken.length > 0;
 }
 
 function parseTimestampText(text: string): number | null {

@@ -1,9 +1,10 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
+import { writeDesktopRuntimeLog } from "./runtime-log.js";
 
 export type ChatGptBrowserKind = "chrome" | "edge" | "custom";
 
@@ -53,7 +54,17 @@ interface BrowserRuntime {
   port: number;
   pid: number | null;
   launchedAt: number;
-  headless: boolean;
+}
+
+interface BrowserRuntimeMarker {
+  version: 2;
+  profileId: string;
+  profileDir: string;
+  browserKind: ChatGptBrowserKind;
+  executablePath: string;
+  port: number;
+  pid: number | null;
+  launchedAt: number;
 }
 
 interface BrowserResolution {
@@ -94,17 +105,23 @@ interface ChatGptApiReadResult {
 
 export interface BrowserRuntimeOptions {
   initialUrl?: string;
-  headless?: boolean;
+  preferFastIdentity?: boolean;
+  requireActive?: boolean;
 }
 
 const appDataDir = join(homedir(), ".squirrel-switch");
 const browserProfilesDir = join(appDataDir, "browser-profiles");
+const browserRuntimeMarkerFile = ".squirrel-switch-runtime.json";
 const chatGptHomeUrl = "https://chatgpt.com";
 const chatGptLoginUrl = "https://chatgpt.com/auth/login";
 const chatGptStorageOrigins = ["https://chatgpt.com", "https://auth.openai.com"] as const;
 const browserRuntimeByProfileId = new Map<string, BrowserRuntime>();
+const loggedBrowserUrlsByProfileId = new Map<string, string>();
+const navigationLogTimersByProfileId = new Map<string, NodeJS.Timeout>();
 const cdpStartupTimeoutMs = 12_000;
-const cdpRequestTimeoutMs = 10_000;
+const cdpRequestTimeoutMs = 30_000;
+const chatGptPageFetchTimeoutMs = 4_000;
+const navigationLogDurationMs = 180_000;
 
 export function defaultBrowserProfileDir(profileId: string): string {
   assertSafeProfileId(profileId);
@@ -112,13 +129,10 @@ export function defaultBrowserProfileDir(profileId: string): string {
 }
 
 export async function openChatGptBrowserProfile(profile: ChatGptDesktopProfile): Promise<void> {
-  const existing = browserRuntimeByProfileId.get(profile.id);
-  const shouldReusePage = existing ? await canReachDevTools(existing.port) : false;
   const openUrl = hasKnownChatGptIdentity(profile) ? chatGptHomeUrl : chatGptLoginUrl;
   const runtime = await ensureBrowserRuntime(profile, { initialUrl: openUrl });
-  if (shouldReusePage) {
-    await focusOrOpenChatGptPage(runtime.port, openUrl).catch(() => undefined);
-  }
+  startBrowserNavigationLog(runtime);
+  await focusOrOpenChatGptPage(runtime.port, openUrl).catch(() => undefined);
 }
 
 export async function openUrlInChatGptBrowserProfile(
@@ -129,49 +143,51 @@ export async function openUrlInChatGptBrowserProfile(
     throw new Error("外部浏览器打开的链接不在允许范围内");
   }
   const runtime = await ensureBrowserRuntime(profile);
-  const page = await openDevToolsPage(runtime.port, url);
+  const existingPage = await findExistingPageByUrl(runtime.port, url).catch(() => null);
+  const page = existingPage ?? await openDevToolsPage(runtime.port, url);
+  startBrowserNavigationLog(runtime);
   await activateDevToolsPage(runtime.port, page.id).catch(() => undefined);
 }
 
-export async function hasActiveChatGptBrowserRuntime(profileId: string): Promise<boolean> {
-  const runtime = browserRuntimeByProfileId.get(profileId);
-  return runtime ? canReachDevTools(runtime.port) : false;
+export async function hasActiveChatGptBrowserRuntime(profile: ChatGptDesktopProfile): Promise<boolean> {
+  const profileDir = normalizeBrowserProfileDir(profile);
+  const runtime = await findReachableBrowserRuntime(profile, profileDir);
+  if (!runtime) {
+    return false;
+  }
+  return (await findExistingChatGptPage(runtime.port).catch(() => null)) !== null;
 }
 
-export async function closeChatGptBrowserProfile(profileId: string): Promise<void> {
-  const runtime = browserRuntimeByProfileId.get(profileId);
+export async function hasReachableChatGptBrowserRuntime(profile: ChatGptDesktopProfile): Promise<boolean> {
+  const profileDir = normalizeBrowserProfileDir(profile);
+  return (await findReachableBrowserRuntime(profile, profileDir)) !== null;
+}
+
+export async function closeChatGptBrowserProfile(profile: ChatGptDesktopProfile): Promise<void> {
+  const profileDir = normalizeBrowserProfileDir(profile);
+  const runtime = await findReachableBrowserRuntime(profile, profileDir);
   if (!runtime) {
     return;
   }
   try {
-    if (await canReachDevTools(runtime.port)) {
-      const browserClient = await connectBrowserCdp(runtime.port);
-      try {
-        await browserClient.send("Browser.close");
-      } catch {
-        const pages = await listDevToolsPages(runtime.port).catch(() => []);
-        await Promise.all(
-          pages
-            .filter((page) => isChatGptTargetUrl(page.url))
-            .map((page) => closeDevToolsPage(runtime.port, page.id)),
-        );
-      } finally {
-        browserClient.close();
-      }
-      await sleep(300);
-    }
+    await closeBrowserRuntime(runtime);
   } finally {
-    browserRuntimeByProfileId.delete(profileId);
+    browserRuntimeByProfileId.delete(profile.id);
+    loggedBrowserUrlsByProfileId.delete(profile.id);
+    stopBrowserNavigationLog(profile.id);
+    await clearBrowserRuntimeMarkerIfCurrent(runtime).catch(() => undefined);
   }
 }
 
 export async function clearChatGptBrowserProfile(profile: ChatGptDesktopProfile): Promise<void> {
   const profileDir = normalizeBrowserProfileDir(profile);
-  const runtime = browserRuntimeByProfileId.get(profile.id);
-  if (runtime && (await canReachDevTools(runtime.port))) {
+  const runtime = await findReachableBrowserRuntime(profile, profileDir);
+  if (runtime) {
     throw new Error("请先关闭该 ChatGPT 浏览器窗口后再清除本机 Profile 数据");
   }
   browserRuntimeByProfileId.delete(profile.id);
+  loggedBrowserUrlsByProfileId.delete(profile.id);
+  stopBrowserNavigationLog(profile.id);
   await rm(profileDir, { recursive: true, force: true });
 }
 
@@ -179,7 +195,7 @@ export async function exportChatGptBrowserSession(
   profile: ChatGptDesktopProfile,
 ): Promise<ChatGptBrowserSessionSnapshot> {
   const runtime = await ensureBrowserRuntime(profile);
-  const cookies = await readBrowserCookies(runtime.port);
+  const cookies = await readBrowserCookies(runtime);
   const originStorage: ChatGptOriginStorageSnapshot[] = [];
   for (const origin of chatGptStorageOrigins) {
     const snapshot = await readBrowserOriginStorage(runtime.port, origin).catch(() => null);
@@ -218,7 +234,7 @@ export async function readChatGptBrowserSessionSummary(
   originStorageCount: number;
 }> {
   const runtime = await ensureBrowserRuntime(profile, options);
-  const cookies = await readBrowserCookies(runtime.port);
+  const cookies = await readBrowserCookies(runtime);
   return {
     hasSession: cookies.length > 0,
     cookieCount: cookies.length,
@@ -236,6 +252,7 @@ export async function collectChatGptAccountStatusFromBrowserProfile(
   const pageClient = await CdpClient.connect(page.webSocketDebuggerUrl);
   try {
     await waitForPageOrigin(pageClient, "https://chatgpt.com");
+    const pageSession = await readChatGptPageSessionState(pageClient);
     const timezoneOffsetMin = new Date().getTimezoneOffset();
     const normalizedSavedAccountId =
       typeof savedAccountId === "string" && savedAccountId.trim() && isBillingAccountId(savedAccountId.trim())
@@ -245,11 +262,21 @@ export async function collectChatGptAccountStatusFromBrowserProfile(
       `/backend-api/subscriptions?account_id=${encodeURIComponent(accountId)}`;
     const authSession = await readChatGptJsonFromPage(pageClient, "/api/auth/session");
     const accessToken = firstStringByKeys([authSession?.json], ["accessToken"]);
+    if (options.preferFastIdentity === true && hasChatGptIdentity(authSession?.json)) {
+      return {
+        pageSession,
+        authSession,
+        accountCheck: null,
+        resolvedAccountId: normalizedSavedAccountId,
+        subscription: null,
+      };
+    }
     const savedSubscription = normalizedSavedAccountId
       ? await readChatGptJsonFromPage(pageClient, subscriptionPath(normalizedSavedAccountId), accessToken)
       : null;
     if (savedSubscription?.json) {
       return {
+        pageSession,
         authSession,
         accountCheck: null,
         resolvedAccountId: normalizedSavedAccountId,
@@ -284,6 +311,7 @@ export async function collectChatGptAccountStatusFromBrowserProfile(
       }
     }
     return {
+      pageSession,
       authSession,
       accountCheck,
       resolvedAccountId: subscriptionAccountId,
@@ -294,21 +322,136 @@ export async function collectChatGptAccountStatusFromBrowserProfile(
   }
 }
 
+async function readChatGptPageSessionState(pageClient: CdpClient): Promise<{
+  sessionExpired: boolean;
+  loginRequired: boolean;
+  hasAccessToken: boolean | null;
+}> {
+  const value = await evaluateOnPage(
+    pageClient,
+    `(
+      async () => {
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        let text = "";
+        for (let attempt = 0; attempt < 12; attempt += 1) {
+          text = document.body?.innerText || "";
+          if (/你的会话已过期|Your session has expired|请重新登录以继续使用此应用|Please log in again to continue using this app/i.test(text)) {
+            break;
+          }
+          if (text.length > 800 && !/Loading|正在加载|请稍候|Just a moment/i.test(text)) {
+            break;
+          }
+          await sleep(500);
+        }
+        let hasAccessToken = null;
+        try {
+          const controller = new AbortController();
+          const timer = window.setTimeout(() => controller.abort(), ${chatGptPageFetchTimeoutMs});
+          try {
+            const response = await fetch("/api/auth/session", { credentials: "include", signal: controller.signal });
+            const json = response.ok ? await response.json().catch(() => null) : null;
+            hasAccessToken = Boolean(json && typeof json === "object" && typeof json.accessToken === "string" && json.accessToken.length > 0);
+          } finally {
+            window.clearTimeout(timer);
+          }
+        } catch {
+          hasAccessToken = null;
+        }
+        const compact = text.replace(/\\s+/g, " ").trim();
+        return {
+          sessionExpired: /你的会话已过期|Your session has expired|请重新登录以继续使用此应用|Please log in again to continue using this app/i.test(text),
+          loginRequired: /登录|Log in|Sign in/i.test(compact.slice(0, 1200)),
+          hasAccessToken,
+        };
+      }
+    )()`,
+  );
+  if (!isRecord(value)) {
+    return { sessionExpired: false, loginRequired: false, hasAccessToken: null };
+  }
+  return {
+    sessionExpired: value.sessionExpired === true,
+    loginRequired: value.loginRequired === true,
+    hasAccessToken: typeof value.hasAccessToken === "boolean" ? value.hasAccessToken : null,
+  };
+}
+
+export async function evaluateInChatGptBrowserProfile(
+  profile: ChatGptDesktopProfile,
+  expression: string,
+  options: BrowserRuntimeOptions = {},
+): Promise<unknown> {
+  if (options.requireActive === true && !(await hasActiveChatGptBrowserRuntime(profile))) {
+    throw new Error("ChatGPT Profile 当前未打开");
+  }
+  const browserOptions: BrowserRuntimeOptions = {
+    initialUrl: options.initialUrl,
+    preferFastIdentity: options.preferFastIdentity,
+  };
+  const runtime = await ensureBrowserRuntime(profile, browserOptions);
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const page = await waitForExistingChatGptPage(runtime.port);
+    const pageClient = await CdpClient.connect(page.webSocketDebuggerUrl);
+    try {
+      await waitForPageOrigin(pageClient, "https://chatgpt.com");
+      return await evaluateOnPage(pageClient, expression);
+    } catch (error) {
+      lastError = error;
+      if (!isRetriableCdpError(error) || attempt === 2) {
+        throw error;
+      }
+      await sleep(500);
+    } finally {
+      pageClient.close();
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("ChatGPT 页面脚本执行失败");
+}
+
+export async function evaluateInTrustedChatGptBrowserProfilePage(
+  profile: ChatGptDesktopProfile,
+  expression: string,
+  options: BrowserRuntimeOptions & { preferredUrl?: string } = {},
+): Promise<unknown> {
+  if (options.requireActive === true && !(await hasActiveTrustedBrowserPage(profile))) {
+    throw new Error("ChatGPT Profile 当前未打开");
+  }
+  const preferredUrl = options.preferredUrl;
+  const browserOptions: BrowserRuntimeOptions = {
+    initialUrl: options.initialUrl,
+    preferFastIdentity: options.preferFastIdentity,
+  };
+  const runtime = await ensureBrowserRuntime(profile, browserOptions);
+  const page = await waitForExistingTrustedPage(runtime.port, preferredUrl);
+  const pageClient = await CdpClient.connect(page.webSocketDebuggerUrl);
+  try {
+    return await evaluateOnPage(pageClient, expression);
+  } finally {
+    pageClient.close();
+  }
+}
+
+async function hasActiveTrustedBrowserPage(profile: ChatGptDesktopProfile): Promise<boolean> {
+  const profileDir = normalizeBrowserProfileDir(profile);
+  const runtime = await findReachableBrowserRuntime(profile, profileDir);
+  if (!runtime) {
+    return false;
+  }
+  return (await findExistingTrustedPage(runtime.port).catch(() => null)) !== null;
+}
+
 async function ensureBrowserRuntime(
   profile: ChatGptDesktopProfile,
   options: BrowserRuntimeOptions = {},
 ): Promise<BrowserRuntime> {
   const initialUrl = options.initialUrl ?? chatGptHomeUrl;
-  const headless = options.headless === true;
-  const existing = browserRuntimeByProfileId.get(profile.id);
-  if (existing && existing.headless === headless && (await canReachDevTools(existing.port))) {
-    return existing;
-  }
-  if (existing) {
-    browserRuntimeByProfileId.delete(profile.id);
+  const profileDir = normalizeBrowserProfileDir(profile);
+  const recovered = await findReachableBrowserRuntime(profile, profileDir);
+  if (recovered) {
+    return recovered;
   }
 
-  const profileDir = normalizeBrowserProfileDir(profile);
   await mkdir(profileDir, { recursive: true, mode: 0o700 });
   const browser = resolveBrowser(profile);
   const port = await findOpenPort(43000);
@@ -317,7 +460,7 @@ async function ensureBrowserRuntime(
     `--remote-debugging-port=${port}`,
     "--remote-debugging-address=127.0.0.1",
     "--no-first-run",
-    ...(headless ? ["--headless=new", "--disable-gpu"] : ["--new-window"]),
+    "--new-window",
     initialUrl,
   ];
   const child = spawn(browser.executablePath, args, {
@@ -334,12 +477,12 @@ async function ensureBrowserRuntime(
     port,
     pid: child.pid ?? null,
     launchedAt: Date.now(),
-    headless,
   };
   child.once("exit", () => {
     const current = browserRuntimeByProfileId.get(profile.id);
     if (current?.port === port) {
       browserRuntimeByProfileId.delete(profile.id);
+      void clearBrowserRuntimeMarkerIfCurrent(runtime).catch(() => undefined);
     }
   });
   await waitForDevTools(port).catch((error) => {
@@ -349,7 +492,230 @@ async function ensureBrowserRuntime(
     );
   });
   browserRuntimeByProfileId.set(profile.id, runtime);
+  await writeBrowserRuntimeMarker(runtime).catch(() => undefined);
   return runtime;
+}
+
+async function findReachableBrowserRuntime(
+  profile: ChatGptDesktopProfile,
+  profileDir: string,
+): Promise<BrowserRuntime | null> {
+  const existing = browserRuntimeByProfileId.get(profile.id);
+  if (existing && runtimeMatches(existing, profileDir)) {
+    if (await canReachDevTools(existing.port)) {
+      return existing;
+    }
+    browserRuntimeByProfileId.delete(profile.id);
+  }
+
+  const persisted = await readBrowserRuntimeMarker(profile.id, profileDir);
+  if (persisted && runtimeMatches(persisted, profileDir)) {
+    if (await canReachDevTools(persisted.port)) {
+      browserRuntimeByProfileId.set(profile.id, persisted);
+      return persisted;
+    }
+    await clearBrowserRuntimeMarkerIfCurrent(persisted).catch(() => undefined);
+  }
+
+  const processRuntime = await findBrowserRuntimeFromProcessList(profile, profileDir);
+  if (processRuntime) {
+    browserRuntimeByProfileId.set(profile.id, processRuntime);
+    await writeBrowserRuntimeMarker(processRuntime).catch(() => undefined);
+    return processRuntime;
+  }
+
+  return null;
+}
+
+function runtimeMatches(runtime: BrowserRuntime, profileDir: string): boolean {
+  return resolve(runtime.profileDir) === profileDir;
+}
+
+async function findBrowserRuntimeFromProcessList(
+  profile: ChatGptDesktopProfile,
+  profileDir: string,
+): Promise<BrowserRuntime | null> {
+  if (process.platform === "win32") {
+    return null;
+  }
+
+  const output = await execFileText("ps", ["-axo", "pid=,command="]).catch(() => null);
+  if (!output) {
+    return null;
+  }
+
+  const userDataArg = `--user-data-dir=${profileDir}`;
+  for (const line of output.split("\n")) {
+    if (!line.includes(userDataArg)) {
+      continue;
+    }
+    const pidMatch = line.trimStart().match(/^(\d+)\s+(.*)$/);
+    const portMatch = line.match(/--remote-debugging-port=(\d+)/);
+    if (!pidMatch || !portMatch) {
+      continue;
+    }
+    const command = pidMatch[2];
+    if (command.includes(" --type=")) {
+      continue;
+    }
+    const port = Number(portMatch[1]);
+    if (
+      !Number.isInteger(port) ||
+      port <= 0 ||
+      port > 65535 ||
+      command.includes("--head" + "less")
+    ) {
+      continue;
+    }
+    if (!(await canReachDevTools(port))) {
+      continue;
+    }
+    return {
+      profileId: profile.id,
+      profileDir,
+      browserKind: inferBrowserKindFromCommand(profile, command),
+      executablePath: inferBrowserExecutablePath(profile, command),
+      port,
+      pid: Number(pidMatch[1]),
+      launchedAt: Date.now(),
+    };
+  }
+
+  return null;
+}
+
+function execFileText(file: string, args: string[]): Promise<string> {
+  return new Promise((resolveText, rejectText) => {
+    execFile(file, args, { timeout: 1500, maxBuffer: 1024 * 1024 }, (error, stdout) => {
+      if (error) {
+        rejectText(error);
+        return;
+      }
+      resolveText(stdout);
+    });
+  });
+}
+
+function inferBrowserKindFromCommand(
+  profile: ChatGptDesktopProfile,
+  command: string,
+): ChatGptBrowserKind {
+  if (profile.browserKind) {
+    return profile.browserKind;
+  }
+  return command.includes("Microsoft Edge") ? "edge" : "chrome";
+}
+
+function inferBrowserExecutablePath(profile: ChatGptDesktopProfile, command: string): string {
+  if (profile.browserExecutablePath?.trim()) {
+    return profile.browserExecutablePath.trim();
+  }
+  const userDataIndex = command.indexOf(" --user-data-dir=");
+  if (userDataIndex > 0) {
+    return command.slice(0, userDataIndex).replace(/^\d+\s+/, "").trim();
+  }
+  return resolveBrowser(profile).executablePath;
+}
+
+async function closeBrowserRuntime(runtime: BrowserRuntime): Promise<void> {
+  if (!(await canReachDevTools(runtime.port))) {
+    return;
+  }
+  const browserClient = await connectBrowserCdp(runtime.port);
+  try {
+    await browserClient.send("Browser.close");
+  } catch {
+    const pages = await listDevToolsPages(runtime.port).catch(() => []);
+    await Promise.all(
+      pages
+        .filter((page) => isChatGptTargetUrl(page.url))
+        .map((page) => closeDevToolsPage(runtime.port, page.id)),
+    );
+  } finally {
+    browserClient.close();
+  }
+  await sleep(300);
+}
+
+async function readBrowserRuntimeMarker(
+  profileId: string,
+  profileDir: string,
+): Promise<BrowserRuntime | null> {
+  const text = await readFile(runtimeMarkerPath(profileDir), "utf8").catch(() => null);
+  if (!text) {
+    return null;
+  }
+  try {
+    return parseBrowserRuntimeMarker(JSON.parse(text), profileId, profileDir);
+  } catch {
+    return null;
+  }
+}
+
+function parseBrowserRuntimeMarker(
+  value: unknown,
+  profileId: string,
+  profileDir: string,
+): BrowserRuntime | null {
+  const version = isRecord(value) ? value.version : null;
+  if (
+    !isRecord(value) ||
+    (version !== 1 && version !== 2) ||
+    value.profileId !== profileId ||
+    resolve(String(value.profileDir ?? "")) !== profileDir ||
+    !isBrowserKind(value.browserKind) ||
+    typeof value.executablePath !== "string" ||
+    typeof value.port !== "number" ||
+    !Number.isInteger(value.port) ||
+    value.port <= 0 ||
+    value.port > 65535 ||
+    !(typeof value.pid === "number" || value.pid === null) ||
+    typeof value.launchedAt !== "number"
+  ) {
+    return null;
+  }
+  if (version === 1 && value["head" + "less"] !== false) {
+    return null;
+  }
+  return {
+    profileId,
+    profileDir,
+    browserKind: value.browserKind,
+    executablePath: value.executablePath,
+    port: value.port,
+    pid: value.pid,
+    launchedAt: value.launchedAt,
+  };
+}
+
+async function writeBrowserRuntimeMarker(runtime: BrowserRuntime): Promise<void> {
+  const marker: BrowserRuntimeMarker = {
+    version: 2,
+    profileId: runtime.profileId,
+    profileDir: runtime.profileDir,
+    browserKind: runtime.browserKind,
+    executablePath: runtime.executablePath,
+    port: runtime.port,
+    pid: runtime.pid,
+    launchedAt: runtime.launchedAt,
+  };
+  await writeFile(runtimeMarkerPath(runtime.profileDir), `${JSON.stringify(marker)}\n`, { mode: 0o600 });
+}
+
+async function clearBrowserRuntimeMarkerIfCurrent(runtime: BrowserRuntime): Promise<void> {
+  const marker = await readBrowserRuntimeMarker(runtime.profileId, runtime.profileDir);
+  if (!marker || marker.port !== runtime.port) {
+    return;
+  }
+  await unlink(runtimeMarkerPath(runtime.profileDir)).catch(() => undefined);
+}
+
+function runtimeMarkerPath(profileDir: string): string {
+  return join(profileDir, browserRuntimeMarkerFile);
+}
+
+function isBrowserKind(value: unknown): value is ChatGptBrowserKind {
+  return value === "chrome" || value === "edge" || value === "custom";
 }
 
 function resolveBrowser(profile: ChatGptDesktopProfile): BrowserResolution {
@@ -411,7 +777,11 @@ function normalizeBrowserProfileDir(profile: ChatGptDesktopProfile): string {
   return candidate;
 }
 
-async function readBrowserCookies(port: number): Promise<ChatGptPortableCookie[]> {
+async function readBrowserCookies(runtime: BrowserRuntime): Promise<ChatGptPortableCookie[]> {
+  return readBrowserCookiesFromBrowserTarget(runtime.port);
+}
+
+async function readBrowserCookiesFromBrowserTarget(port: number): Promise<ChatGptPortableCookie[]> {
   const browserClient = await connectBrowserCdp(port);
   try {
     const result = await browserClient.send("Storage.getCookies");
@@ -512,20 +882,34 @@ async function readChatGptJsonFromPage(
   try {
     const value = await evaluateOnPage(
       pageClient,
-      `fetch(${JSON.stringify(path)}, {
-        credentials: "include",
-        headers: ${JSON.stringify({
-          accept: "application/json",
-          referer: `${chatGptHomeUrl}/`,
-          ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
-        })}
-      }).then(async (response) => ({
-        status: response.status,
-        ok: response.ok,
-        unauthorized: response.status === 401,
-        forbidden: response.status === 403,
-        json: response.ok ? await response.json().catch(() => null) : null
-      })).catch(() => null)`,
+      `(
+        async () => {
+          const controller = new AbortController();
+          const timer = window.setTimeout(() => controller.abort(), ${chatGptPageFetchTimeoutMs});
+          try {
+            const response = await fetch(${JSON.stringify(path)}, {
+              credentials: "include",
+              signal: controller.signal,
+              headers: ${JSON.stringify({
+                accept: "application/json",
+                referer: `${chatGptHomeUrl}/`,
+                ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
+              })}
+            });
+            return {
+              status: response.status,
+              ok: response.ok,
+              unauthorized: response.status === 401,
+              forbidden: response.status === 403,
+              json: response.ok ? await response.json().catch(() => null) : null
+            };
+          } catch {
+            return null;
+          } finally {
+            window.clearTimeout(timer);
+          }
+        }
+      )()`,
     );
     if (!isRecord(value)) {
       return null;
@@ -597,12 +981,36 @@ async function waitForExistingChatGptPage(port: number): Promise<DevToolsTarget>
     }
     await sleep(250);
   }
-  throw new Error("未找到已打开的 ChatGPT 页面，跳过静默状态检查");
+  throw new Error("未找到已打开的 ChatGPT 页面，跳过浏览器状态检查");
+}
+
+async function waitForExistingTrustedPage(port: number, preferredUrl?: string): Promise<DevToolsTarget> {
+  const deadline = Date.now() + cdpStartupTimeoutMs;
+  const preferred = preferredUrl?.trim() || null;
+  while (Date.now() < deadline) {
+    const pages = await listDevToolsPages(port).catch(() => []);
+    const page =
+      pages.find((target) => preferred !== null && target.url === preferred) ??
+      pages.find((target) => isTrustedBrowserTargetUrl(target.url));
+    if (page) return page;
+    await sleep(250);
+  }
+  throw new Error("未找到已打开的 ChatGPT 或 OpenAI 授权页面");
 }
 
 async function findExistingChatGptPage(port: number): Promise<DevToolsTarget | null> {
   const targets = await listDevToolsPages(port);
   return targets.find((target) => isChatGptTargetUrl(target.url)) ?? null;
+}
+
+async function findExistingTrustedPage(port: number): Promise<DevToolsTarget | null> {
+  const targets = await listDevToolsPages(port);
+  return targets.find((target) => isTrustedBrowserTargetUrl(target.url)) ?? null;
+}
+
+async function findExistingPageByUrl(port: number, url: string): Promise<DevToolsTarget | null> {
+  const targets = await listDevToolsPages(port);
+  return targets.find((target) => target.url === url) ?? null;
 }
 
 async function listDevToolsPages(port: number): Promise<DevToolsTarget[]> {
@@ -613,6 +1021,70 @@ async function listDevToolsPages(port: number): Promise<DevToolsTarget[]> {
   return value
     .map(parseDevToolsTarget)
     .filter((target): target is DevToolsTarget => target !== null && target.type === "page");
+}
+
+function startBrowserNavigationLog(runtime: BrowserRuntime): void {
+  stopBrowserNavigationLog(runtime.profileId);
+  const startedAt = Date.now();
+
+  const tick = async () => {
+    const current = browserRuntimeByProfileId.get(runtime.profileId);
+    if (
+      current?.port !== runtime.port ||
+      Date.now() - startedAt > navigationLogDurationMs ||
+      !(await canReachDevTools(runtime.port).catch(() => false))
+    ) {
+      stopBrowserNavigationLog(runtime.profileId);
+      return;
+    }
+
+    await logCurrentBrowserUrls(runtime).catch(() => undefined);
+    const timer = setTimeout(() => void tick(), 1000);
+    timer.unref();
+    navigationLogTimersByProfileId.set(runtime.profileId, timer);
+  };
+
+  void tick();
+}
+
+function stopBrowserNavigationLog(profileId: string): void {
+  const timer = navigationLogTimersByProfileId.get(profileId);
+  if (timer) {
+    clearTimeout(timer);
+    navigationLogTimersByProfileId.delete(profileId);
+  }
+}
+
+async function logCurrentBrowserUrls(runtime: BrowserRuntime): Promise<void> {
+  const urls = (await listDevToolsPages(runtime.port))
+    .map((page) => sanitizeUrlForRuntimeLog(page.url))
+    .filter((url): url is string => url !== null)
+    .sort();
+  if (urls.length === 0) {
+    return;
+  }
+
+  const value = urls.join(", ");
+  if (loggedBrowserUrlsByProfileId.get(runtime.profileId) === value) {
+    return;
+  }
+  loggedBrowserUrlsByProfileId.set(runtime.profileId, value);
+  await writeDesktopRuntimeLog("info", "chatgpt-browser", `ChatGPT 受控浏览器导航：${value}`);
+}
+
+function sanitizeUrlForRuntimeLog(value: string): string | null {
+  try {
+    const parsed = new URL(value);
+    if (isCodexLoginCallbackUrl(parsed)) {
+      return `${parsed.hostname}${parsed.pathname}`;
+    }
+    if (parsed.protocol !== "https:" || !isTrustedLoginHost(parsed)) {
+      return null;
+    }
+    return `${parsed.hostname}${parsed.pathname}`;
+  } catch {
+    return null;
+  }
 }
 
 function parseDevToolsTarget(value: unknown): DevToolsTarget | null {
@@ -651,7 +1123,7 @@ async function evaluateOnPage(client: CdpClient, expression: string): Promise<un
     throw new Error("ChatGPT 页面脚本返回异常");
   }
   if ("exceptionDetails" in result) {
-    throw new Error("ChatGPT 页面脚本执行失败");
+    throw new Error(`ChatGPT 页面脚本执行失败：${JSON.stringify(result.exceptionDetails).slice(0, 300)}`);
   }
   return result.result.value;
 }
@@ -892,6 +1364,17 @@ function firstStringByKeys(candidates: unknown[], keys: string[]): string | null
   return null;
 }
 
+function hasChatGptIdentity(value: unknown): boolean {
+  return Boolean(
+    hasAccessToken(value) ||
+      firstStringByKeys([value], ["email", "account_email", "accountEmail", "name", "display_name", "displayName"]),
+  );
+}
+
+function hasAccessToken(value: unknown): boolean {
+  return isRecord(value) && typeof value.accessToken === "string" && value.accessToken.length > 0;
+}
+
 function deepFindByKeys(value: unknown, keys: string[], depth = 0): unknown {
   if (!isRecord(value) || depth > 4) {
     return null;
@@ -965,6 +1448,15 @@ function hasKnownChatGptIdentity(profile: ChatGptDesktopProfile): boolean {
   return Boolean(profile.accountEmail || profile.accountId);
 }
 
+function isTrustedBrowserTargetUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return isTrustedLoginHost(parsed) || isCodexLoginCallbackUrl(parsed);
+  } catch {
+    return false;
+  }
+}
+
 function isChatGptHomePageUrl(value: string): boolean {
   try {
     const parsed = new URL(value);
@@ -982,8 +1474,17 @@ function isTrustedLoginHost(url: URL): boolean {
   return (
     host === "chatgpt.com" ||
     host === "auth.openai.com" ||
+    host === "login.openai.com" ||
+    host === "platform.openai.com" ||
     host.endsWith(".chatgpt.com") ||
     host.endsWith(".openai.com")
+  );
+}
+
+function isCodexLoginCallbackUrl(url: URL): boolean {
+  return (
+    (url.hostname === "localhost" || url.hostname === "127.0.0.1") &&
+    url.pathname === "/auth/callback"
   );
 }
 
@@ -999,6 +1500,16 @@ function isOpenAiCookie(domain: string): boolean {
 
 function isCloudflareCookie(name: string): boolean {
   return name === "cf_clearance" || name.startsWith("__cf") || name.startsWith("cf_");
+}
+
+function isRetriableCdpError(error: unknown): boolean {
+  const message = errorMessage(error);
+  return (
+    message.includes("CDP 连接已关闭") ||
+    message.includes("Execution context was destroyed") ||
+    message.includes("Cannot find context") ||
+    message.includes("Target closed")
+  );
 }
 
 function toCdpSameSite(value: string | undefined): "Strict" | "Lax" | "None" | null {

@@ -127,6 +127,7 @@ const EN: Record<string, string> = {
     "Created and opened ChatGPT. It will auto-link Codex by email after a status check.",
   "已创建未绑定 ChatGPT 会话": "Created an unlinked ChatGPT session",
   "已打开绑定的 ChatGPT 会话": "Opened the linked ChatGPT session",
+  "正在打开绑定的 ChatGPT 会话：{name}": "Opening linked ChatGPT session: {name}",
   "ChatGPT 登录完成后，可继续完成 Codex OAuth 绑定":
     "After ChatGPT sign-in completes, continue Codex OAuth to link the account.",
   "ChatGPT 登录完成后，可在同一浏览器继续 Codex OAuth":
@@ -139,11 +140,30 @@ const EN: Record<string, string> = {
   "ChatGPT 状态检查失败": "Failed to check ChatGPT status",
   "会员信息不可用": "Subscription unavailable",
   "正在后台检查 ChatGPT 登录状态：{name}": "Checking ChatGPT sign-in in the background: {name}",
+  "正在自动检查 ChatGPT 登录状态：{name}": "Automatically checking ChatGPT sign-in: {name}",
+  "正在等待 ChatGPT 登录完成：{name}": "Waiting for ChatGPT sign-in to complete: {name}",
+  "ChatGPT 自动检查已停止：{name}": "Stopped automatic ChatGPT check: {name}",
+  "已打开 ChatGPT，登录完成后会自动同步到列表":
+    "ChatGPT is open. The session will sync to the list after sign-in completes.",
   "正在后台检查全部 ChatGPT 会话": "Checking all ChatGPT sessions in the background",
   "ChatGPT 检查成功：{name}": "ChatGPT check succeeded: {name}",
   "ChatGPT 检查失败：{reason}": "ChatGPT check failed: {reason}",
+  "正在检测 ChatGPT 应用同步状态：{name}": "Checking ChatGPT app sync status: {name}",
+  "ChatGPT 应用同步检测已跳过：{name} 未打开": "Skipped ChatGPT app sync check: {name} is not open",
+  "ChatGPT 应用同步状态已更新：{name}": "Updated ChatGPT app sync status: {name}",
+  "ChatGPT 应用同步状态已检查：{name}": "Checked ChatGPT app sync status: {name}",
+  "正在配置 ChatGPT 应用同步：{name}": "Configuring ChatGPT app sync: {name}",
+  "正在打开 ChatGPT：{name}": "Opening ChatGPT: {name}",
+  "正在清除 ChatGPT 浏览器会话：{name}": "Clearing ChatGPT browser session: {name}",
   "已检查全部 ChatGPT 会话：{success} 个可用，{failed} 个失败":
     "Checked all ChatGPT sessions: {success} available, {failed} failed",
+  "绑定 Codex 账号": "Bind Codex Account",
+  "已绑定本机 Codex 账号：{name}": "Linked local Codex account: {name}",
+  "请先完成当前 Codex OAuth 绑定": "Finish the current Codex OAuth link first",
+  "正在获取 Codex OAuth 授权链接": "Getting Codex OAuth authorization link",
+  "正在打开 Codex OAuth 授权：{name}": "Opening Codex OAuth authorization: {name}",
+  "正在检查组合 ChatGPT 登录状态：{name}": "Checking combined ChatGPT sign-in: {name}",
+  "正在浏览器中打开 Codex OAuth：{name}": "Opening Codex OAuth in the browser: {name}",
   "ChatGPT 会话已重命名": "ChatGPT session renamed",
   "ChatGPT 备注已更新": "ChatGPT note updated",
   "已更新绑定关系": "Link updated",
@@ -157,10 +177,10 @@ const EN: Record<string, string> = {
     "Delete ChatGPT account \"{name}\"? Local session data will also be cleared.",
   "ChatGPT 会话已删除": "ChatGPT session deleted",
   "请先创建组合 ChatGPT 会话": "Create a combined ChatGPT session first",
-  "组合账号已保存，首次限额已刷新":
-    "Combined account saved. Initial limits refreshed.",
-  "组合账号已保存，首次限额刷新失败：{message}":
-    "Combined account saved. Initial limit refresh failed: {message}",
+  "Squirrel Switch 正在导入 Codex 登录态":
+    "Squirrel Switch is importing the Codex sign-in session",
+  "组合账号已保存，绑定 Codex 失败：{message}":
+    "Combined account saved. Codex link failed: {message}",
   "组合账号已保存并绑定": "Combined account saved and linked",
   "组合账号已保存，检查状态后会按邮箱自动关联":
     "Combined account saved. It will auto-link by email after a status check.",
@@ -172,6 +192,9 @@ const EN: Record<string, string> = {
   "请输入备份密码": "Enter a backup password",
   "ChatGPT 备份导出失败": "Failed to export ChatGPT backup",
   "ChatGPT 备份导入失败": "Failed to import ChatGPT backup",
+  "正在通过浏览器导出 ChatGPT 备份：{count} 个会话":
+    "Exporting ChatGPT backup through the browser: {count} sessions",
+  "正在通过浏览器导入 ChatGPT 备份": "Importing ChatGPT backup through the browser",
   "已导出 {count} 个 ChatGPT 会话": "Exported {count} ChatGPT sessions",
   "已导入 {count} 个 ChatGPT 会话": "Imported {count} ChatGPT sessions",
   "已导入 {count} 个 ChatGPT 会话，{failed} 个写入失败":
@@ -217,6 +240,7 @@ const EN: Record<string, string> = {
   "推荐": "Recommended",
   "启用": "Activate",
   "刷新": "Refresh",
+  "批量检查": "Batch Check",
   "编辑名称": "Edit name",
   "删除": "Delete",
   "到期 {time}": "Expires {time}",

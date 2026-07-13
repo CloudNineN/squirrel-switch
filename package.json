@@ -1,6 +1,6 @@
 {
   "name": "squirrel-switch",
-  "version": "1.12.0",
+  "version": "1.16.0",
   "private": false,
   "license": "GPL-3.0-or-later",
   "type": "module",
@@ -16,6 +16,7 @@
     "package:win": "node scripts/package-win.mjs",
     "set-version": "node scripts/set-version.mjs",
     "typecheck": "node scripts/typecheck.mjs",
+    "test:account-management": "node scripts/build.mjs && node --test tests/account-management.test.mjs",
     "mcp:install": "node scripts/chatgpt-mcp-tunnel.mjs install",
     "mcp:start": "node scripts/chatgpt-mcp-tunnel.mjs start",
     "mcp:status": "node scripts/chatgpt-mcp-tunnel.mjs status",

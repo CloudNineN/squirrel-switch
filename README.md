@@ -57,7 +57,7 @@ Default local services:
 - Local database: `~/.squirrel-switch/squirrel-switch.sqlite`
 - Master key: macOS Keychain first, fallback to `~/.squirrel-switch/master-key`
 
-Current version: `V1.12.0`
+Current version: `V1.16.0`
 
 ## Desktop App
 

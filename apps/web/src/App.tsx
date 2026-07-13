@@ -190,7 +190,7 @@ export function App() {
         if (finishedAt && previousFinishedAt && finishedAt !== previousFinishedAt) {
           const [nextAccounts, nextRuntime] = await Promise.all([api.accounts(), api.runtime()]);
           if (!stopped) {
-            setAccounts(sortAccountsByPlanAndWeeklyReset(nextAccounts));
+            setAccounts(nextAccounts);
             setRuntime(nextRuntime);
           }
         }
@@ -242,7 +242,7 @@ export function App() {
         api.accounts(),
         api.runtime(),
       ]);
-      setAccounts(sortAccountsByPlanAndWeeklyReset(nextAccounts));
+      setAccounts(nextAccounts);
       setRuntime(nextRuntime);
       void loadChatGptProfiles();
       void loadClaudeCodeProfileCount();
@@ -287,7 +287,7 @@ export function App() {
       const result = await task();
       after?.(result);
       const [nextAccounts, nextRuntime] = await Promise.all([api.accounts(), api.runtime()]);
-      setAccounts(sortAccountsByPlanAndWeeklyReset(nextAccounts));
+      setAccounts(nextAccounts);
       setRuntime(nextRuntime);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err), feedbackSection);
@@ -421,7 +421,7 @@ export function App() {
 
     setBusy({ action: "open-chatgpt", id: account.id });
     setError(null, "accounts");
-    setNotice(null, "accounts");
+    setNotice(t("正在打开绑定的 ChatGPT 会话：{name}", { name: account.name }), "accounts");
     try {
       const result = await desktop.openChatGpt(toChatGptDesktopProfile(profile));
       if (!result.opened) {
@@ -503,8 +503,8 @@ export function App() {
       message: "正在读取限额与订阅信息",
     });
     try {
-      const refreshed = await api.refresh(account.id);
-      applyRefreshedAccount(refreshed);
+      await api.refresh(account.id);
+      setAccounts(await api.accounts());
       highlightRefreshedAccount(account.id);
       updateRefreshLog(logId, { status: "success", message: t("刷新成功") });
       setNotice(t("{name} 已刷新", { name: account.name }), feedbackSection);
@@ -572,7 +572,7 @@ export function App() {
         });
         void api
           .accounts()
-          .then((nextAccounts) => setAccounts(sortAccountsByPlanAndWeeklyReset(nextAccounts)))
+          .then(setAccounts)
           .catch(() => undefined);
       }
       if (completedCount < targets.length) {
@@ -585,6 +585,10 @@ export function App() {
         refreshNext(),
       ),
     );
+    const nextAccounts = await api.accounts().catch(() => null);
+    if (nextAccounts) {
+      setAccounts(nextAccounts);
+    }
     void api.runtime().then(setRuntime).catch(() => undefined);
     setNotice(t("刷新完成：成功 {success} 个，失败 {failed} 个", { success: successCount, failed: failedCount }), feedbackSection);
     setBusy(null);
@@ -738,7 +742,7 @@ export function App() {
           {section === "scheduled-refresh" && (
             <ScheduledRefreshPanel
               onAccountsChanged={(nextAccounts, nextRuntime) => {
-                setAccounts(sortAccountsByPlanAndWeeklyReset(nextAccounts));
+                setAccounts(nextAccounts);
                 setRuntime(nextRuntime);
               }}
             />
@@ -1796,30 +1800,7 @@ function replaceAccount(accounts: AccountView[], account: AccountView) {
   if (!replaced.some((candidate) => candidate.id === account.id)) {
     replaced.push(account);
   }
-  return sortAccountsByPlanAndWeeklyReset(replaced);
-}
-
-function sortAccountsByPlanAndWeeklyReset(accounts: AccountView[]) {
-  return [...accounts].sort(compareAccountsByPlanAndWeeklyReset);
-}
-
-function compareAccountsByPlanAndWeeklyReset(a: AccountView, b: AccountView) {
-  const planDelta = planSortRank(a) - planSortRank(b);
-  if (planDelta !== 0) return planDelta;
-
-  const aReset = a.usage?.secondary?.resetsAt ?? Number.MAX_SAFE_INTEGER;
-  const bReset = b.usage?.secondary?.resetsAt ?? Number.MAX_SAFE_INTEGER;
-  if (aReset !== bReset) return aReset - bReset;
-
-  return a.name.localeCompare(b.name, "zh-CN");
-}
-
-function planSortRank(account: AccountView) {
-  const plan = (account.planType || account.subscriptionPlan || "").toLowerCase();
-  if (plan === "pro") return 0;
-  if (plan === "plus") return 1;
-  if (plan === "free") return 2;
-  return 3;
+  return replaced;
 }
 
 function runtimeLevelLabel(level: RuntimeLogView["level"], locale: AppLocale) {
@@ -1854,6 +1835,7 @@ function formatPercent(value: number | null | undefined) {
 
 function formatSubscription(account: AccountView, locale: AppLocale) {
   const label = (text: string) => translateInline(text, locale);
+  if (account.planType?.toLowerCase() === "free") return "—";
   if (account.subscriptionExpiresAt) return formatTime(account.subscriptionExpiresAt, locale);
   if (account.subscriptionRenewsAt) return formatTime(account.subscriptionRenewsAt, locale);
   if (account.planType && account.planType !== "free" && account.planType !== "unknown") {

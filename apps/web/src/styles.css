@@ -193,6 +193,7 @@ a {
   position: sticky;
   top: 0;
   height: 100vh;
+  overflow: hidden;
   border-right: 1px solid var(--border);
 }
 
@@ -232,6 +233,17 @@ a {
 .sidebarNav {
   display: grid;
   gap: 18px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 0;
+  margin-right: 0;
+  scrollbar-width: none;
+}
+
+.sidebarNav::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .navGroup {
@@ -318,12 +330,16 @@ a {
 
 .sidebar .footer {
   margin-top: auto;
-  padding: 10px 6px;
-  border-top: 1px solid var(--border);
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  flex: 0 0 auto;
+  background: var(--surface);
   font-size: 11px;
   color: var(--text-muted);
   overflow-wrap: anywhere;
   line-height: 1.5;
+  box-shadow: var(--shadow-sm);
 }
 
 /* ============ Main ============ */
@@ -1141,6 +1157,21 @@ a {
   border-color: #fecaca;
 }
 
+.readonlyStatus {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.readonlyStatus.enabled {
+  color: var(--success);
+}
+
+.readonlyStatus.disabled {
+  color: var(--text-muted);
+}
+
 .rowActions {
   display: flex;
   gap: 4px;
@@ -1569,6 +1600,7 @@ a {
     height: auto;
     flex-direction: row;
     overflow-x: auto;
+    overflow-y: hidden;
     padding: 12px;
     gap: 12px;
   }
@@ -1585,6 +1617,9 @@ a {
     align-items: stretch;
     flex: 0 0 auto;
     min-width: max-content;
+    overflow: visible;
+    padding-right: 0;
+    margin-right: 0;
   }
 
   .navGroup {

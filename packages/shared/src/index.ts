@@ -1,4 +1,4 @@
-export const APP_VERSION = "1.12.0";
+export const APP_VERSION = "1.16.0";
 
 export interface VersionUpdateLogEntry {
   version: string;
@@ -11,6 +11,333 @@ export interface VersionUpdateLogEntry {
 export const VERSION_UPDATE_LOG_LIMIT = 5;
 
 export const VERSION_UPDATE_LOG: VersionUpdateLogEntry[] = [
+  {
+    version: "1.16.0",
+    date: "2026-07-11",
+    title: "OpenAI 账号管理一致性修复",
+    highlights: [
+      "Codex 账号列表改为按会员等级从高到低、同等级按会员到期日从早到晚稳定排序。",
+      "Codex OAuth 登录成功后统一自动刷新一次首次限额，单独登录和组合登录行为保持一致。",
+      "ChatGPT 账号识别邮箱后直接使用邮箱作为默认名称，不再继续生成重复的账号编号。",
+    ],
+    fixes: [
+      "修复 Codex 限额已返回 Free，但账号计划仍被旧 account/read 或令牌值覆盖为 Plus 的问题。",
+      "修复 Free 账号继续显示旧会员到期日，以及前后端重复排序导致列表顺序不一致的问题。",
+      "已有 ChatGPT 默认编号名称会在识别到邮箱后自动更新，同时保留用户手动设置的备注。",
+    ],
+  },
+  {
+    version: "1.15.9",
+    date: "2026-07-02",
+    title: "ChatGPT 检查入口收口",
+    highlights: [
+      "移除 ChatGPT 单账号检查登录状态按钮，避免把只能读取已打开窗口的能力误解为离线检查。",
+      "批量检查改为逐个打开可见浏览器窗口、读取登录和订阅状态、检测应用同步后关闭窗口。",
+      "无法检查返回的 unchecked 不再写入数据库，避免覆盖已有可用、Plus 或需重新登录状态。",
+    ],
+    fixes: [
+      "修复单账号检查按钮闪一下后把列表状态改成未检查的问题。",
+      "修复批量检查不主动打开 Profile 时只能依赖既有窗口、结果不稳定的问题。",
+      "补充前端到桌面端的关闭 ChatGPT Profile 能力，批量检查完成后自动收尾。",
+    ],
+  },
+  {
+    version: "1.15.8",
+    date: "2026-07-02",
+    title: "检查登录状态不再污染账号状态",
+    highlights: [
+      "检查登录状态按钮明确为检查已打开的 ChatGPT 窗口；未打开时只提示用户先打开窗口。",
+      "无法检查返回的 unchecked 不再写入数据库，避免覆盖已有可用、Plus 或需重新登录状态。",
+      "自动登录轮询遇到 Profile 未打开会立即停止，不再每 8 秒反复检查和刷提示。",
+    ],
+    fixes: [
+      "修复点击检查登录状态后，已知 Plus 会话被快速改成未检查的问题。",
+      "修复自动状态刷新在目标浏览器窗口关闭后持续写入 unchecked 日志的问题。",
+      "修复按钮文案过于笼统，导致用户误以为未打开浏览器也能完成真实登录检查的问题。",
+    ],
+  },
+  {
+    version: "1.15.7",
+    date: "2026-07-02",
+    title: "浏览器后台任务前台可见",
+    highlights: [
+      "ChatGPT 自动登录检查、应用同步检测、备份导入导出和 OAuth 推进都会在主界面显示正在执行的具体任务。",
+      "应用同步自动检测不再使用静默语义，未打开 Profile 时会明确提示跳过。",
+      "ChatGPT 备份读写会在受控浏览器页面注入任务提示，说明 Squirrel Switch 正在导出或导入会话。",
+    ],
+    fixes: [
+      "修复浏览器后台动作只在内部执行、前台缺少透明提示的问题。",
+      "修复从账号列表打开绑定 ChatGPT 会话时，浏览器动作开始前没有状态提示的问题。",
+      "统一浏览器状态检查文案，避免继续使用静默检查表述。",
+    ],
+  },
+  {
+    version: "1.15.6",
+    date: "2026-07-02",
+    title: "ChatGPT 后台检查提速与提示修复",
+    highlights: [
+      "ChatGPT 登录状态检查优先读取已打开页面的登录身份，账号已登录时先返回结果，不再被订阅接口拖住。",
+      "页面内 ChatGPT 接口请求增加短超时，Cloudflare 或网络阻塞时会快速降级为会员信息不可用。",
+      "点击打开 ChatGPT 后会显示正在后台检查登录状态，和手动检查的前台提示保持一致。",
+    ],
+    fixes: [
+      "修复检查失败或未打开 Profile 时，界面仍残留“正在后台检查 ChatGPT 登录状态”的问题。",
+      "修复手动检查弱结果重试三轮导致等待时间过长的问题。",
+      "补充桌面端后台检查耗时日志，方便后续从 runtime.log 定位慢点。",
+    ],
+  },
+  {
+    version: "1.15.5",
+    date: "2026-07-02",
+    title: "ChatGPT 浏览器改为全可见模式",
+    highlights: [
+      "ChatGPT 受控浏览器链路不再启动无头 Chrome/Edge，统一使用可见浏览器窗口。",
+      "后台状态检查只复用已打开的可见 ChatGPT 页面；未打开时提示先打开 Profile 后再检查。",
+      "运行时标记升级为可见浏览器格式，旧无头运行时不会再被恢复使用。",
+    ],
+    fixes: [
+      "降低无头浏览器触发 Cloudflare 风控后误判账号掉线或需验证的概率。",
+      "修复后台检查为了读取 cookie 自动启动无头浏览器的行为。",
+      "修复旧无头运行时标记可能继续参与 Profile 恢复的问题。",
+    ],
+  },
+  {
+    version: "1.15.4",
+    date: "2026-07-02",
+    title: "ChatGPT 会话过期实测修复",
+    highlights: [
+      "检查 ChatGPT 状态时会读取页面中的会话过期和未登录提示，不再只依赖 cookie 或账号接口返回。",
+      "会话过期或未登录的 Profile 会降为 guest 并提示需重新登录，会员到期和应用同步状态同步失效。",
+      "Profile 状态更新后会立即重算应用同步行，避免数据库里残留已同步状态。",
+    ],
+    fixes: [
+      "修复页面显示“你的会话已过期”时，列表仍显示可用、Free 和已同步的问题。",
+      "修复未登录 guest 页面仍被保存为可用会话的问题。",
+      "修复 ChatGPT Profile 计划变为 guest 后，应用同步表可能继续残留 synced 的问题。",
+    ],
+  },
+  {
+    version: "1.15.3",
+    date: "2026-07-02",
+    title: "ChatGPT guest 状态与后台检查修复",
+    highlights: [
+      "guest 和 free 计划不再展示会员到期时间，避免沿用旧订阅日期造成误导。",
+      "guest 会话不再参与应用同步聚合、明细和自动检测，列表中显示为不适用。",
+      "后台检查遇到残留浏览器进程但没有 ChatGPT 页面时只做清理或提示，不再自动打开可见浏览器窗口。",
+    ],
+    fixes: [
+      "修复 guest 会话仍显示会员到期时间和“已同步 1/1”的问题。",
+      "修复检查登录状态或后台应用同步可能反复打开 ChatGPT 浏览器窗口的严重回归。",
+      "修复 Browser context management is not supported 兜底读取 cookie 时可能创建可见 about:blank 页的问题。",
+    ],
+  },
+  {
+    version: "1.15.2",
+    date: "2026-07-02",
+    title: "ChatGPT 空页面进程恢复",
+    highlights: [
+      "检查 ChatGPT 登录状态时会区分浏览器调试端口可达和 ChatGPT 页面真正可用，残留空进程会先恢复页面再检查。",
+      "受控浏览器 cookie 读取兼容 Chrome 在无页面目标时返回的 Browser context management 限制。",
+    ],
+    fixes: [
+      "修复 ChatGPT Profile 浏览器进程仍在但页面已关闭时，检查登录状态长时间等待后报 Browser context management is not supported 的问题。",
+      "修复应用同步静默检测把空浏览器进程误判为可操作页面，导致后台任务提示反复写入失败日志的问题。",
+    ],
+  },
+  {
+    version: "1.15.1",
+    date: "2026-07-02",
+    title: "ChatGPT Profile 调试端点恢复",
+    highlights: [
+      "检查 ChatGPT 登录状态前会恢复已打开的受控浏览器调试端口，应用重启后也能复用原 Profile 窗口。",
+      "受控浏览器启动后写入本地运行时标记，减少重复启动同一 Profile 导致的调试端点连接失败。",
+    ],
+    fixes: [
+      "修复 ChatGPT Profile 已在浏览器中打开时，点击检查登录状态仍可能提示无法连接调试端点的问题。",
+      "修复清除 ChatGPT 本机会话前漏判仍在运行的外部浏览器 Profile 的问题。",
+    ],
+  },
+  {
+    version: "1.15.0",
+    date: "2026-07-02",
+    title: "ChatGPT 会话绑定 Codex",
+    highlights: [
+      "ChatGPT 会话列表新增绑定 Codex 入口，已登录但未绑定的 GPT 会话可直接补充 Codex 绑定。",
+      "绑定时优先匹配本机同邮箱 Codex 账号；存在匹配时直接写入绑定关系，不再启动 OAuth。",
+      "无本机匹配账号时复用当前 GPT 浏览器 Profile 打开 Codex OAuth，授权成功后自动回写绑定关系。",
+    ],
+    fixes: [
+      "修复组合登录期间自动状态读取可能干扰 ChatGPT 登录页邮箱提交的问题。",
+      "修复重复点击手动打开 Codex OAuth 按钮可能创建多个登录会话的问题。",
+    ],
+  },
+  {
+    version: "1.14.9",
+    date: "2026-06-30",
+    title: "MCP OAuth 顶层回调修复",
+    highlights: [
+      "ChatGPT MCP OAuth 回调改为顶层页面导航执行，以匹配 ChatGPT 网页真实连接流程。",
+      "检测到 MCP 连接 ACTIVE 后自动把受控页面带回 ChatGPT 首页，避免停留在回调错误页。",
+      "继续保留连接状态轮询，只有 ChatGPT 返回目标 MCP link 后才回写已同步。",
+    ],
+    fixes: [
+      "修复 fetch 或隐藏 iframe 回调完成后 ChatGPT 仍不生成 MCP link 的问题。",
+      "修复目标账号已创建开发者 MCP 但一键配置持续报未检测到已授权 MCP 的问题。",
+    ],
+  },
+  {
+    version: "1.14.8",
+    date: "2026-06-30",
+    title: "MCP OAuth 回调导航修复",
+    highlights: [
+      "ChatGPT MCP OAuth 回调改为在受控页面中用隐藏 iframe 完成导航。",
+      "继续保持用户可见 ChatGPT 页面不跳转到回调错误页。",
+      "保留回调后的 ACTIVE 连接状态校验，避免只凭回调页面加载判断成功。",
+    ],
+    fixes: [
+      "修复 fetch 回调完成但 ChatGPT 连接列表仍没有生成 MCP link，导致一键配置停在确认连接状态的问题。",
+      "修复目标账号中已创建开发者 MCP 但未被添加到 ChatGPT 时的自动连接失败问题。",
+    ],
+  },
+  {
+    version: "1.14.7",
+    date: "2026-06-30",
+    title: "MCP OAuth 自动连接修复",
+    highlights: [
+      "一键配置自定义 MCP 时只使用 ChatGPT 应用 ID，不再把版本 ID 当成连接器 ID。",
+      "MCP OAuth 授权提交前会先加载授权页并继承页面 cookie，更接近真实网页登录表单流程。",
+      "ChatGPT 页面顶部任务提示的最短展示时间改为从提示成功注入后开始计算。",
+    ],
+    fixes: [
+      "修复已有 MCP 应用但尚未连接时，一键配置可能停在确认连接状态并被判定为未找到的问题。",
+      "修复任务提示在页面刚打开或文案快速切换时可能一闪而过的问题。",
+    ],
+  },
+  {
+    version: "1.14.6",
+    date: "2026-06-30",
+    title: "MCP 同步状态口径修正",
+    highlights: [
+      "自定义 MCP 同步状态改为只按 Server URL 和连接授权状态判断。",
+      "本地名称、描述和认证备注变化不再让已连接的 MCP 变成待同步。",
+      "保存应用配置后的提示改为中性文案，避免误导用户认为所有编辑都会重新同步。",
+    ],
+    fixes: [
+      "修复修改自定义 MCP 名称后应用同步摘要从 1/1 变成 0/1 的问题。",
+      "同步设计文档明确自定义 MCP 的远端身份为 Server URL。",
+    ],
+  },
+  {
+    version: "1.14.5",
+    date: "2026-06-30",
+    title: "OAuth 回调后台完成",
+    highlights: [
+      "ChatGPT MCP OAuth 回调改为在受控页面上下文中后台完成，不再把可见页面导航到回调 URL。",
+      "回调后继续以 ChatGPT 连接器状态确认是否 ACTIVE，避免只凭回调请求判断成功。",
+      "一键配置成功后不再让用户停留在 ChatGPT 回调错误页。",
+    ],
+    fixes: [
+      "修复 MCP 实际已可用但页面显示“建立连接时发生意外错误”的误导体验。",
+      "减少 OAuth 回调页面渲染错误对自动配置结果感知的干扰。",
+    ],
+  },
+  {
+    version: "1.14.4",
+    date: "2026-06-30",
+    title: "任务提示注入修复",
+    highlights: [
+      "ChatGPT 应用一键配置继续保持后台自动配置，不再为了显示提示强制跳转设置页。",
+      "受控 ChatGPT 页面顶部任务提示的注入脚本改为自包含，避免引用页面中不存在的 helper。",
+      "保留页面加载瞬间的短重试和更明确的 CDP 异常日志，方便后续排查。",
+    ],
+    fixes: [
+      "修复任务提示注入时报 waitForDocumentContainer is not defined，导致网页顶部没有提示条的问题。",
+      "撤回 1.14.3 中先打开并绑定设置页的错误修复方向。",
+    ],
+  },
+  {
+    version: "1.14.3",
+    date: "2026-06-30",
+    title: "应用同步提示修复",
+    highlights: [
+      "ChatGPT 应用一键配置会先打开并绑定目标设置页，再执行后台检测、创建和授权动作。",
+      "一键配置期间的顶部任务提示固定注入到目标 ChatGPT 页面，减少多标签页或页面刚打开时提示丢失。",
+      "任务提示注入遇到 ChatGPT 页面导航中的上下文切换时会短重试。",
+    ],
+    fixes: [
+      "修复一键配置实际成功但受控 ChatGPT 页面没有显示后台任务提示的问题。",
+      "运行日志中的 ChatGPT 页面脚本执行失败会记录更具体的 CDP 异常摘要，便于后续排查。",
+    ],
+  },
+  {
+    version: "1.14.2",
+    date: "2026-06-30",
+    title: "MCP 自动开启开发模式",
+    highlights: [
+      "自定义 MCP 一键配置会在创建前自动确认 ChatGPT 开发人员模式。",
+      "如果目标账号尚未开启开发人员模式，Squirrel Switch 会在受控 ChatGPT Profile 中自动开启后继续创建 MCP。",
+      "自动开启开发人员模式阶段接入顶部任务提示，提醒用户不要关闭受控浏览器窗口。",
+    ],
+    fixes: [
+      "修复开发人员模式关闭时 ChatGPT MCP 自动配置失败并提示 Developer mode is required 的问题。",
+      "如果创建接口仍返回开发人员模式错误，会强制开启并重试一次，避免状态不同步导致的误失败。",
+    ],
+  },
+  {
+    version: "1.14.1",
+    date: "2026-06-30",
+    title: "后台提示体验补齐",
+    highlights: [
+      "GPT+Codex 组合登录的 Codex OAuth 链路接入受控浏览器顶部任务提示。",
+      "获取 Codex OAuth 链接、打开授权页、等待授权结果和导入后首次限额刷新都会显示当前后台阶段。",
+      "任务提示支持 ChatGPT 页面和 OpenAI 授权页，授权页提示默认不启用关闭确认，避免干扰 OAuth 跳转。",
+    ],
+    fixes: [
+      "所有受控浏览器任务提示增加最短显示时间，避免快速检测或跳转时一闪而过。",
+      "清理提示时支持指定目标授权页，减少多个受控标签页同时存在时清错页面的情况。",
+    ],
+  },
+  {
+    version: "1.14.0",
+    date: "2026-06-30",
+    title: "ChatGPT 后台任务提示",
+    highlights: [
+      "ChatGPT 受控浏览器执行账号状态读取、应用同步检测和 MCP 自动配置时，会在页面顶部显示当前后台任务。",
+      "自定义 MCP 创建、同 URL 复用、OAuth 授权和官方应用连接阶段增加防误关保护，降低中途关闭导致配置失败的概率。",
+      "OAuth 回调跳转阶段会临时取消防误关保护，避免授权回调被浏览器离开确认拦截。",
+    ],
+    fixes: [
+      "静默检测不会为了显示任务提示额外打开新的 ChatGPT 窗口。",
+      "任务完成或失败后会清理受控浏览器顶部提示，用户关闭窗口时清理失败不会影响同步结果。",
+    ],
+  },
+  {
+    version: "1.13.0",
+    date: "2026-06-29",
+    title: "应用同步自动配置",
+    highlights: [
+      "应用同步接入 ChatGPT 当前 Profile 的真实连接器状态检测，自动识别官方应用和自定义 MCP 是否已连接。",
+      "应用同步明细支持一键配置自定义 MCP，并对密码型 OAuth MCP 自动完成授权回调。",
+      "OAuth MCP 密码按敏感凭据加密保存，列表只展示是否已保存，不展示、不复制明文。",
+    ],
+    fixes: [
+      "移除应用同步明细里的人工标记已同步和跳过按钮，状态改为依赖真实检测结果。",
+      "修复侧栏滚动条、底部版本块、启用状态样式和明细表格自适应体验问题。",
+    ],
+  },
+  {
+    version: "1.12.1",
+    date: "2026-06-29",
+    title: "应用同步界面修复",
+    highlights: [
+      "应用同步配置新增和编辑统一使用弹窗表单，表单操作按钮固定在弹窗底部。",
+      "ChatGPT 会话列表的应用同步明细弹窗保留默认宽度，明细表格按弹窗宽度自适应。",
+    ],
+    fixes: [
+      "修复应用同步操作列按钮样式和 tooltip 表现不一致的问题。",
+      "修复应用同步明细表格受全局表格最小宽度影响导致布局不稳定的问题。",
+    ],
+  },
   {
     version: "1.12.0",
     date: "2026-06-28",
@@ -30,7 +357,7 @@ export const VERSION_UPDATE_LOG: VersionUpdateLogEntry[] = [
     date: "2026-06-28",
     title: "ChatGPT 后台检查热修",
     highlights: [
-      "后台检查只确认本地 ChatGPT cookie 是否存在，不再用 headless 浏览器请求 ChatGPT 页面接口。",
+      "后台检查只确认本地 ChatGPT cookie 是否存在，不再用无界面浏览器请求 ChatGPT 页面接口。",
       "检查结果缺少账号详情时，会保留列表中已保存的邮箱、账号 ID 和计划信息。",
     ],
     fixes: [
@@ -790,7 +1117,10 @@ export type {
   ChatGptAppConfigProfileView,
   ChatGptAppConfigType,
   ChatGptAppConfigView,
+  ChatGptAppConfigureResult,
+  ChatGptAppConnectorLinkView,
   ChatGptAppScopeType,
+  ChatGptAppSyncCheckResult,
   ChatGptAppSyncStateView,
   ChatGptAppSyncStatus,
   UpdateChatGptAppSyncStatusPayload,

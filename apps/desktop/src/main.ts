@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, session as electronSession, shell } from "electron";
 import { spawn, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 import { dirname, join, resolve } from "node:path";
@@ -11,6 +12,10 @@ import {
   parseImportBackupRequest,
 } from "./chatgpt-backup.js";
 import {
+  checkChatGptAppSync,
+  configureChatGptAppSync,
+} from "./chatgpt-app-sync.js";
+import {
   emptyChatGptAccountStatus,
   normalizeChatGptAccountStatus,
 } from "./chatgpt-account-status.js";
@@ -20,15 +25,22 @@ import {
   closeChatGptBrowserProfile,
   collectChatGptAccountStatusFromBrowserProfile,
   hasActiveChatGptBrowserRuntime,
+  hasReachableChatGptBrowserRuntime,
   openChatGptBrowserProfile,
   openUrlInChatGptBrowserProfile,
   readChatGptBrowserSessionSummary,
 } from "./chatgpt-browser.js";
 import type { ChatGptBrowserKind, ChatGptDesktopProfile } from "./chatgpt-browser.js";
+import {
+  clearChatGptBrowserTaskNotice,
+  showChatGptBrowserTaskNotice,
+} from "./chatgpt-browser-task-notice.js";
+import { writeDesktopRuntimeLog } from "./runtime-log.js";
 
 let mainWindow: BrowserWindow | null = null;
 let serverProcess: ReturnType<typeof spawn> | null = null;
 let serverOrigin: string | null = null;
+const desktopBridgeToken = randomBytes(32).toString("hex");
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const bundledRootDir = join(process.resourcesPath, "app");
@@ -103,6 +115,19 @@ ipcMain.handle("chatgpt:open", async (_event, input: unknown) => {
   }
 });
 
+ipcMain.handle("chatgpt:close", async (_event, input: unknown) => {
+  const profile = parseChatGptDesktopProfile(input);
+  if (!profile) {
+    return { closed: false, error: "ChatGPT 会话参数不合法" };
+  }
+  try {
+    await closeChatGptBrowserProfile(profile);
+    return { closed: true, error: null };
+  } catch (error) {
+    return { closed: false, error: errorMessage(error) };
+  }
+});
+
 ipcMain.handle("chatgpt:open-url", async (_event, input: unknown) => {
   const request = parseChatGptOpenUrlRequest(input);
   if (!request || !isAllowedChatGptProfileUrl(request.url)) {
@@ -113,6 +138,36 @@ ipcMain.handle("chatgpt:open-url", async (_event, input: unknown) => {
     return { opened: true, error: null };
   } catch (error) {
     return { opened: false, error: errorMessage(error) };
+  }
+});
+
+ipcMain.handle("chatgpt:task-notice-show", async (_event, input: unknown) => {
+  const request = parseChatGptTaskNoticeRequest(input);
+  if (!request) {
+    return { shown: false, error: "ChatGPT 任务提示参数不合法" };
+  }
+  try {
+    await showChatGptBrowserTaskNotice(
+      request.profile,
+      { message: request.message, blocking: request.blocking },
+      { preferredUrl: request.preferredUrl, requireActive: true },
+    );
+    return { shown: true, error: null };
+  } catch (error) {
+    return { shown: false, error: errorMessage(error) };
+  }
+});
+
+ipcMain.handle("chatgpt:task-notice-clear", async (_event, input: unknown) => {
+  const request = parseChatGptTaskNoticeClearRequest(input);
+  if (!request) {
+    return { cleared: false, error: "ChatGPT 任务提示参数不合法" };
+  }
+  try {
+    await clearChatGptBrowserTaskNotice(request.profile, { preferredUrl: request.preferredUrl });
+    return { cleared: true, error: null };
+  } catch (error) {
+    return { cleared: false, error: errorMessage(error) };
   }
 });
 
@@ -159,6 +214,46 @@ ipcMain.handle("chatgpt:account-status", async (_event, input: unknown) => {
   }
 });
 
+ipcMain.handle("chatgpt:app-sync-check", async (_event, input: unknown) => {
+  const request = parseAppSyncCheckRequest(input);
+  if (!request) {
+    return { result: null, error: "ChatGPT 应用同步检测参数不合法" };
+  }
+  try {
+    return {
+      result: await checkChatGptAppSync(request.profile, {
+        requireActive: request.requireActive,
+      }),
+      error: null,
+    };
+  } catch (error) {
+    return { result: null, error: errorMessage(error) };
+  }
+});
+
+ipcMain.handle("chatgpt:app-sync-configure", async (_event, input: unknown) => {
+  const request = parseAppSyncConfigureRequest(input);
+  if (!request) {
+    return { result: null, error: "ChatGPT 应用配置参数不合法" };
+  }
+  if (!serverOrigin) {
+    return { result: null, error: "本地服务尚未启动" };
+  }
+  try {
+    return {
+      result: await configureChatGptAppSync(
+        request.profile,
+        request.configId,
+        serverOrigin,
+        desktopBridgeToken,
+      ),
+      error: null,
+    };
+  } catch (error) {
+    return { result: null, error: errorMessage(error) };
+  }
+});
+
 ipcMain.handle("chatgpt:export-backup", async (_event, input: unknown) => {
   const request = parseExportBackupRequest(input);
   if (!request) {
@@ -189,26 +284,62 @@ async function readChatGptAccountStatus(
   closeAfterCheck: boolean,
 ): Promise<ChatGptAccountStatus> {
   const checkedAt = Math.floor(Date.now() / 1000);
-  const shouldCloseAfterCheck = closeAfterCheck && !(await hasActiveChatGptBrowserRuntime(profile.id));
-  const browserOptions = shouldCloseAfterCheck ? { headless: true, initialUrl: "about:blank" } : {};
-  try {
-    const summary = await readChatGptBrowserSessionSummary(profile, browserOptions);
-    if (!summary.hasSession) {
-      return emptyChatGptAccountStatus("invalid", checkedAt, "未找到 ChatGPT 登录 cookie");
+  const startedAt = Date.now();
+  const finish = async (status: ChatGptAccountStatus): Promise<ChatGptAccountStatus> => {
+    await writeDesktopRuntimeLog(
+      status.status === "available" ? "info" : "warn",
+      "chatgpt",
+      `后台检查 ChatGPT 会话 ${profile.displayName}：${status.status}，耗时 ${Date.now() - startedAt}ms${
+        status.error ? `，${status.error}` : ""
+      }`,
+    );
+    return status;
+  };
+  let hasActiveBrowser = await hasActiveChatGptBrowserRuntime(profile);
+  const hasReachableBrowser = hasActiveBrowser ? true : await hasReachableChatGptBrowserRuntime(profile);
+  if (hasReachableBrowser && !hasActiveBrowser) {
+    if (closeAfterCheck) {
+      return finish(emptyChatGptAccountStatus("unchecked", checkedAt, "未找到已打开的 ChatGPT 页面，请先打开该 Profile 后再检查"));
+    } else {
+      await openChatGptBrowserProfile(profile).catch(() => undefined);
+      hasActiveBrowser = await hasActiveChatGptBrowserRuntime(profile);
+      if (!hasActiveBrowser) {
+        throw new Error("ChatGPT 浏览器进程存在但没有可用页面，请重新打开该 Profile 后再检查");
+      }
     }
-    if (shouldCloseAfterCheck) {
-      return emptyChatGptAccountStatus("available", checkedAt, "已检测到本地 ChatGPT 登录 cookie");
+  }
+  if (closeAfterCheck && !hasActiveBrowser) {
+    return finish(emptyChatGptAccountStatus("unchecked", checkedAt, "请先打开 ChatGPT 窗口后再检查登录状态"));
+  }
+  const shouldShowNotice = hasActiveBrowser;
+  if (shouldShowNotice) {
+    await showChatGptBrowserTaskNotice(profile, {
+      message: "Squirrel Switch 正在读取 ChatGPT 账号与订阅状态",
+      blocking: false,
+    });
+  }
+  try {
+    const summary = await readChatGptBrowserSessionSummary(profile);
+    if (!summary.hasSession) {
+      return finish(emptyChatGptAccountStatus("invalid", checkedAt, "未找到 ChatGPT 登录 cookie"));
     }
 
     try {
-      const value = await collectChatGptAccountStatusFromBrowserProfile(profile, savedAccountId, browserOptions);
-      return normalizeChatGptAccountStatus(value, checkedAt);
-    } catch {
-      return emptyChatGptAccountStatus("available", checkedAt, "会员信息不可用");
+      const value = await collectChatGptAccountStatusFromBrowserProfile(profile, savedAccountId, {
+        preferFastIdentity: true,
+      });
+      return finish(normalizeChatGptAccountStatus(value, checkedAt));
+    } catch (error) {
+      await writeDesktopRuntimeLog(
+        "warn",
+        "chatgpt",
+        `ChatGPT 账号详情读取失败：${errorMessage(error)}`,
+      );
+      return finish(emptyChatGptAccountStatus("available", checkedAt, "会员信息不可用"));
     }
   } finally {
-    if (shouldCloseAfterCheck) {
-      await closeChatGptBrowserProfile(profile.id).catch(() => undefined);
+    if (shouldShowNotice) {
+      await clearChatGptBrowserTaskNotice(profile);
     }
   }
 }
@@ -273,6 +404,36 @@ function parseAccountStatusRequest(
   return { profile, accountId, closeAfterCheck: value.closeAfterCheck === true };
 }
 
+function parseAppSyncCheckRequest(
+  value: unknown,
+): { profile: ChatGptDesktopProfile; requireActive: boolean } | null {
+  if (typeof value === "string") {
+    return null;
+  }
+  if (isRecord(value) && "profile" in value) {
+    const profile = parseChatGptDesktopProfile(value.profile);
+    return profile
+      ? {
+          profile,
+          requireActive: value.requireActive === true,
+        }
+      : null;
+  }
+  const profile = parseChatGptDesktopProfile(value);
+  return profile ? { profile, requireActive: false } : null;
+}
+
+function parseAppSyncConfigureRequest(
+  value: unknown,
+): { profile: ChatGptDesktopProfile; configId: string } | null {
+  if (!isRecord(value) || typeof value.configId !== "string") {
+    return null;
+  }
+  const profile = parseChatGptDesktopProfile(value.profile);
+  const configId = value.configId.trim();
+  return profile && configId ? { profile, configId } : null;
+}
+
 function parseChatGptOpenUrlRequest(
   value: unknown,
 ): { profile: ChatGptDesktopProfile; url: string } | null {
@@ -284,6 +445,42 @@ function parseChatGptOpenUrlRequest(
     return null;
   }
   return { profile, url: value.url };
+}
+
+function parseChatGptTaskNoticeRequest(
+  value: unknown,
+): { profile: ChatGptDesktopProfile; message: string; blocking: boolean; preferredUrl?: string } | null {
+  if (!isRecord(value) || typeof value.message !== "string") {
+    return null;
+  }
+  const profile = parseChatGptDesktopProfile(value.profile);
+  const message = value.message.trim();
+  if (!profile || !message) {
+    return null;
+  }
+  const preferredUrl =
+    typeof value.preferredUrl === "string" && isAllowedChatGptProfileUrl(value.preferredUrl)
+      ? value.preferredUrl
+      : undefined;
+  return { profile, message, blocking: value.blocking === true, preferredUrl };
+}
+
+function parseChatGptTaskNoticeClearRequest(
+  value: unknown,
+): { profile: ChatGptDesktopProfile; preferredUrl?: string } | null {
+  if (!isRecord(value)) {
+    const profile = parseChatGptDesktopProfile(value);
+    return profile ? { profile } : null;
+  }
+  const profile = parseChatGptDesktopProfile("profile" in value ? value.profile : value);
+  if (!profile) {
+    return null;
+  }
+  const preferredUrl =
+    typeof value.preferredUrl === "string" && isAllowedChatGptProfileUrl(value.preferredUrl)
+      ? value.preferredUrl
+      : undefined;
+  return { profile, preferredUrl };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -555,7 +752,11 @@ function isTrustedLoginHost(url: URL): boolean {
 async function startServer(port: number): Promise<void> {
   serverProcess = spawn(nodeBinary, [serverEntry], {
     cwd: serverCwd,
-    env: { ...process.env, PORT: String(port) },
+    env: {
+      ...process.env,
+      PORT: String(port),
+      SQUIRREL_SWITCH_DESKTOP_BRIDGE_TOKEN: desktopBridgeToken,
+    },
     stdio: ["ignore", "pipe", "pipe"],
   });
 

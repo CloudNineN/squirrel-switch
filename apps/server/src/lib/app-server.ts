@@ -7,7 +7,7 @@ import { getErrorMessage } from "./errors.js";
 import { authJsonPath } from "./paths.js";
 import { nowSeconds } from "./time.js";
 
-const APP_VERSION = "1.12.0";
+const APP_VERSION = "1.16.0";
 
 interface AppServerResponse<T> {
   id: number;

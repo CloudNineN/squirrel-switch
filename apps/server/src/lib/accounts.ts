@@ -9,7 +9,7 @@ import { parseAuthJson } from "./auth-json.js";
 import type { ParsedAuthJson } from "./auth-json.js";
 import { nowSeconds } from "./time.js";
 import { AppError, getErrorMessage } from "./errors.js";
-import { resolveCodexBinary } from "./codex-binary.js";
+import { CODEX_BINARY_NOT_FOUND_MESSAGE, resolveCodexBinary } from "./codex-binary.js";
 import {
   activateFiveHourWindowFromAuthJson,
   readAccountFromAuthJson,
@@ -19,6 +19,8 @@ import type { RateLimitSnapshot } from "./app-server.js";
 import { openCodexApp, quitCodexAppIfRunning } from "./codex-app.js";
 import type { CodexAppRestartView } from "./codex-app.js";
 import { writeRuntimeLog } from "./runtime-log.js";
+import { resolveSubscriptionExpiresAt, selectCodexPlanType } from "./account-plan.js";
+import { compareAccountsByMembershipAndExpiry } from "./account-sorting.js";
 
 export interface ActivateAccountResult {
   account: AccountView;
@@ -77,7 +79,7 @@ const activeFiveHourActivations = new Set<string>();
 
 export function listAccounts(): AccountView[] {
   const rows = db.prepare("SELECT * FROM accounts").all() as AccountRow[];
-  return rows.map(mapAccount).sort(compareAccountsByPlanAndWeeklyReset);
+  return rows.map(mapAccount).sort(compareAccountsByMembershipAndExpiry);
 }
 
 export function getAccountRow(id: string): AccountRow {
@@ -117,11 +119,17 @@ export async function importAuthJson(payload: ImportAuthJsonPayload): Promise<Ac
   const now = nowSeconds();
 
   if (existing) {
+    const planType = existing.plan_type ?? parsed.planType;
+    const subscriptionExpiresAt = resolveSubscriptionExpiresAt(
+      planType,
+      parsed.subscriptionExpiresAt,
+      existing.subscription_expires_at,
+    );
     db.transaction(() => {
       db.prepare(
         `UPDATE accounts
          SET name = ?, email = ?, account_id = ?, workspace_id = ?, plan_type = ?,
-             subscription_expires_at = COALESCE(?, subscription_expires_at),
+             subscription_expires_at = ?,
              encrypted_auth_json = ?, auth_hash = ?, updated_at = ?
          WHERE id = ?`,
       ).run(
@@ -129,8 +137,8 @@ export async function importAuthJson(payload: ImportAuthJsonPayload): Promise<Ac
         parsed.email,
         parsed.accountId,
         parsed.workspaceId,
-        parsed.planType,
-        parsed.subscriptionExpiresAt,
+        planType,
+        subscriptionExpiresAt,
         encrypted,
         authHash,
         now,
@@ -236,7 +244,7 @@ export async function activateAccount(id: string): Promise<ActivateAccountResult
     await refreshAccount(targetId);
   } catch (error) {
     throw new AppError(
-      `账号刷新验证失败，已标记为不可用，未写入当前 auth.json：${getErrorMessage(error)}`,
+      `账号刷新验证失败，未写入当前 auth.json：${getErrorMessage(error)}`,
       502,
     );
   }
@@ -345,7 +353,7 @@ async function captureCurrentActiveAuth(path: string, codexHome: string): Promis
 
     // 磁盘登录态与数据库不一致时,先校验磁盘态是否仍有效,
     // 避免用已吊销/失效的磁盘登录态覆盖数据库中更可信的记录。
-    const codexBinary = await resolveCodexBinary(getSetting("codexBinaryPath"));
+    const codexBinary = await resolveCodexBinary();
     if (!codexBinary) {
       void writeRuntimeLog("warn", "account", "跳过回收当前登录态：未找到 codex 命令");
       return;
@@ -369,13 +377,24 @@ async function captureCurrentActiveAuth(path: string, codexHome: string): Promis
       return;
     }
 
+    const selected = selectRateLimit(result.rateLimits);
+    const planType = selectCodexPlanType(
+      selected?.planType,
+      result.account?.account?.planType,
+      parsed.parsed.planType,
+    );
+    const subscriptionExpiresAt = resolveSubscriptionExpiresAt(
+      planType,
+      parsed.parsed.subscriptionExpiresAt,
+      activeRow.subscription_expires_at,
+    );
     db.prepare(
       `UPDATE accounts
        SET email = COALESCE(?, email),
            account_id = COALESCE(?, account_id),
            workspace_id = COALESCE(?, workspace_id),
            plan_type = COALESCE(?, plan_type),
-           subscription_expires_at = COALESCE(?, subscription_expires_at),
+           subscription_expires_at = ?,
            encrypted_auth_json = ?,
            auth_hash = ?,
            updated_at = ?
@@ -384,8 +403,8 @@ async function captureCurrentActiveAuth(path: string, codexHome: string): Promis
       parsed.parsed.email,
       parsed.parsed.accountId,
       parsed.parsed.workspaceId,
-      parsed.parsed.planType,
-      parsed.parsed.subscriptionExpiresAt,
+      planType,
+      subscriptionExpiresAt,
       await encryptText(parsed.normalized),
       authHash,
       nowSeconds(),
@@ -605,9 +624,9 @@ async function refreshAccountFromAuth(
   authJson: string,
   options: { codexHome?: string } = {},
 ): Promise<string> {
-  const codexBinary = await resolveCodexBinary(getSetting("codexBinaryPath"));
+  const codexBinary = await resolveCodexBinary();
   if (!codexBinary) {
-    throw new AppError("未找到 codex 命令或 Codex.app 内置 codex", 503);
+    throw new AppError(CODEX_BINARY_NOT_FOUND_MESSAGE, 503);
   }
 
   const appServerResult = options.codexHome
@@ -618,10 +637,17 @@ async function refreshAccountFromAuth(
   const authHash = sha256Text(parsed.normalized);
   const encrypted = await encryptText(parsed.normalized);
   const selected = selectRateLimit(appServerResult.rateLimits);
-  const planType =
-    appServerResult.account?.account?.planType ??
-    selected?.planType ??
-    parsed.parsed.planType;
+  const stored = getAccountRow(id);
+  const planType = selectCodexPlanType(
+    selected?.planType,
+    appServerResult.account?.account?.planType,
+    parsed.parsed.planType,
+  );
+  const subscriptionExpiresAt = resolveSubscriptionExpiresAt(
+    planType,
+    parsed.parsed.subscriptionExpiresAt,
+    stored.subscription_expires_at,
+  );
   const now = nowSeconds();
 
   db.transaction(() => {
@@ -631,7 +657,7 @@ async function refreshAccountFromAuth(
            account_id = COALESCE(?, account_id),
            workspace_id = COALESCE(?, workspace_id),
            plan_type = COALESCE(?, plan_type),
-           subscription_expires_at = COALESCE(?, subscription_expires_at),
+           subscription_expires_at = ?,
            subscription_error = NULL,
            encrypted_auth_json = ?,
            auth_hash = ?,
@@ -643,7 +669,7 @@ async function refreshAccountFromAuth(
       parsed.parsed.accountId,
       parsed.parsed.workspaceId,
       planType,
-      parsed.parsed.subscriptionExpiresAt,
+      subscriptionExpiresAt,
       encrypted,
       authHash,
       now,
@@ -674,14 +700,15 @@ async function activateFiveHourWindow(row: AccountRow): Promise<boolean> {
     return false;
   }
 
-  const codexBinary = await resolveCodexBinary(getSetting("codexBinaryPath"));
+  const codexBinary = await resolveCodexBinary();
   if (!codexBinary) {
-    throw new AppError("未找到 codex 命令或 Codex.app 内置 codex", 503);
+    throw new AppError(CODEX_BINARY_NOT_FOUND_MESSAGE, 503);
   }
 
   activeFiveHourActivations.add(row.id);
   try {
-    const authJson = await decryptText(getAccountRow(row.id).encrypted_auth_json);
+    const currentRow = getAccountRow(row.id);
+    const authJson = await decryptText(currentRow.encrypted_auth_json);
     const result = await activateFiveHourWindowFromAuthJson(codexBinary, authJson);
     const parsed = parseAuthJson(result.updatedAuthJson);
     const authHash = sha256Text(parsed.normalized);
@@ -696,7 +723,12 @@ async function activateFiveHourWindow(row: AccountRow): Promise<boolean> {
     }
     const activationUntil =
       confirmedActivationUntil ?? result.completedAt + FIVE_HOUR_WINDOW_MINUTES * 60;
-    const planType = selected?.planType ?? parsed.parsed.planType;
+    const planType = selectCodexPlanType(selected?.planType, null, parsed.parsed.planType);
+    const subscriptionExpiresAt = resolveSubscriptionExpiresAt(
+      planType,
+      parsed.parsed.subscriptionExpiresAt,
+      currentRow.subscription_expires_at,
+    );
     const activationSource = result.rateLimits ? "scheduled-confirmed" : "scheduled-fallback";
 
     db.transaction(() => {
@@ -706,7 +738,7 @@ async function activateFiveHourWindow(row: AccountRow): Promise<boolean> {
              account_id = COALESCE(?, account_id),
              workspace_id = COALESCE(?, workspace_id),
              plan_type = COALESCE(?, plan_type),
-             subscription_expires_at = COALESCE(?, subscription_expires_at),
+             subscription_expires_at = ?,
              encrypted_auth_json = ?,
              auth_hash = ?,
              last_refreshed_at = ?,
@@ -721,7 +753,7 @@ async function activateFiveHourWindow(row: AccountRow): Promise<boolean> {
         parsed.parsed.accountId,
         parsed.parsed.workspaceId,
         planType,
-        parsed.parsed.subscriptionExpiresAt,
+        subscriptionExpiresAt,
         encrypted,
         authHash,
         result.completedAt,
@@ -926,26 +958,4 @@ function clearFailedUsageSnapshots(accountId: string): void {
   db.prepare("DELETE FROM account_usage_snapshots WHERE account_id = ? AND stale = 1").run(
     accountId,
   );
-}
-
-function compareAccountsByPlanAndWeeklyReset(a: AccountView, b: AccountView): number {
-  const planDelta = planSortRank(a) - planSortRank(b);
-  if (planDelta !== 0) {
-    return planDelta;
-  }
-
-  const aReset = a.usage?.secondary?.resetsAt ?? Number.MAX_SAFE_INTEGER;
-  const bReset = b.usage?.secondary?.resetsAt ?? Number.MAX_SAFE_INTEGER;
-  if (aReset !== bReset) {
-    return aReset - bReset;
-  }
-  return a.name.localeCompare(b.name, "zh-CN");
-}
-
-function planSortRank(account: AccountView): number {
-  const plan = (account.planType || account.subscriptionPlan || "").toLowerCase();
-  if (plan === "pro") return 0;
-  if (plan === "plus") return 1;
-  if (plan === "free") return 2;
-  return 3;
 }

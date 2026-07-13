@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { writeRuntimeLog } from "./runtime-log.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -9,22 +10,24 @@ export interface CodexAppRestartView {
   error: string | null;
 }
 
-const APP_NAME = "Codex";
+const MACOS_APP_NAME = "ChatGPT";
+const MACOS_APP_DISPLAY_NAME = "ChatGPT/Codex";
 const MACOS_BUNDLE_ID = "com.openai.codex";
 const WINDOWS_APP_ID_FALLBACK = "OpenAI.Codex_2p2nqsd0c76g0!App";
 const QUIT_POLL_INTERVAL_MS = 200;
 const QUIT_GRACEFUL_TIMEOUT_MS = 6000;
+const WINDOWS_FORCE_QUIT_TIMEOUT_MS = 5000;
 const OPEN_WAIT_TIMEOUT_MS = 5000;
 const OPEN_RETRY_ATTEMPTS = 3;
 const OPEN_RETRY_DELAY_MS = 800;
 
-export async function isCodexAppRunning(): Promise<boolean> {
+async function isCodexAppRunning(): Promise<boolean> {
   if (process.platform === "win32") {
     return (await listWindowsCodexAppProcesses()).length > 0;
   }
   if (process.platform !== "darwin") return false;
   try {
-    const { stdout } = await execFileAsync("/usr/bin/pgrep", ["-x", APP_NAME]);
+    const { stdout } = await execFileAsync("/usr/bin/pgrep", ["-x", MACOS_APP_NAME]);
     return stdout.trim().length > 0;
   } catch {
     // pgrep 未匹配进程时退出码为 1,在此视为未运行。
@@ -39,7 +42,7 @@ export interface CodexAppQuitResult {
 }
 
 /**
- * 若 Codex.app 正在运行则优雅退出并等待其停止;否则直接返回。
+ * 若 ChatGPT（旧 Codex）正在运行则优雅退出并等待其停止;否则直接返回。
  * 退出超时不强制结束,而是返回 error 提示需要手动关闭。
  */
 export async function quitCodexAppIfRunning(): Promise<CodexAppQuitResult> {
@@ -56,7 +59,17 @@ export async function quitCodexAppIfRunning(): Promise<CodexAppQuitResult> {
       quitError = error instanceof Error ? error.message : String(error);
     }
 
-    const stopped = await waitUntilStopped(QUIT_GRACEFUL_TIMEOUT_MS);
+    let stopped = await waitUntilStopped(QUIT_GRACEFUL_TIMEOUT_MS);
+    if (!stopped) {
+      void writeRuntimeLog("warn", "account", "Windows Codex.app 优雅退出超时，尝试强制停止 Codex 进程");
+      try {
+        await forceStopWindowsCodexAppProcesses();
+      } catch (error) {
+        quitError = error instanceof Error ? error.message : String(error);
+      }
+      stopped = await waitUntilStopped(WINDOWS_FORCE_QUIT_TIMEOUT_MS);
+    }
+
     return {
       wasRunning: true,
       stopped,
@@ -78,7 +91,7 @@ export async function quitCodexAppIfRunning(): Promise<CodexAppQuitResult> {
   try {
     await execFileAsync("/usr/bin/osascript", [
       "-e",
-      `tell application "${APP_NAME}" to quit`,
+      `tell application "${MACOS_APP_NAME}" to quit`,
     ]);
   } catch (error) {
     quitError = error instanceof Error ? error.message : String(error);
@@ -91,11 +104,11 @@ export async function quitCodexAppIfRunning(): Promise<CodexAppQuitResult> {
     error: stopped
       ? null
       : quitError ??
-        `Codex.app 未在 ${Math.round(QUIT_GRACEFUL_TIMEOUT_MS / 1000)} 秒内退出,请手动关闭 Codex 后再重新打开以加载新账号`,
+        `${MACOS_APP_DISPLAY_NAME}.app 未在 ${Math.round(QUIT_GRACEFUL_TIMEOUT_MS / 1000)} 秒内退出,请手动关闭应用后再重新打开以加载新账号`,
   };
 }
 
-/** 打开 Codex.app(若已在运行,macOS 的 open 不会重复启动)。 */
+/** 打开 ChatGPT（旧 Codex）应用(若已在运行,macOS 的 open 不会重复启动)。 */
 export async function openCodexApp(): Promise<{ opened: boolean; error: string | null }> {
   if (process.platform === "win32") {
     try {
@@ -129,7 +142,7 @@ export async function openCodexApp(): Promise<{ opened: boolean; error: string |
       await execFileAsync("/usr/bin/open", ["-b", MACOS_BUNDLE_ID]);
       const opened = await waitUntilRunning(OPEN_WAIT_TIMEOUT_MS);
       if (opened) return { opened: true, error: null };
-      errors.push("Codex.app 已请求打开,但未检测到 Codex 主进程");
+      errors.push(`${MACOS_APP_DISPLAY_NAME}.app 已请求打开,但未检测到主进程`);
     } catch (error) {
       errors.push(error instanceof Error ? error.message : String(error));
     }
@@ -137,28 +150,7 @@ export async function openCodexApp(): Promise<{ opened: boolean; error: string |
 
   return {
     opened: false,
-    error: `Codex.app 重新打开失败:${errors.at(-1) ?? "未知错误"}`,
-  };
-}
-
-/**
- * 若 Codex.app 当前正在运行,优雅退出后重新打开;否则不动。
- * 优雅退出超时不强制结束,而是返回 error 提示前端要求用户手动重启。
- */
-export async function restartCodexAppIfRunning(): Promise<CodexAppRestartView> {
-  const quit = await quitCodexAppIfRunning();
-  if (!quit.wasRunning) {
-    return { attempted: false, restarted: false, error: null };
-  }
-  if (!quit.stopped) {
-    return { attempted: true, restarted: false, error: quit.error };
-  }
-
-  const open = await openCodexApp();
-  return {
-    attempted: true,
-    restarted: open.opened,
-    error: open.opened ? null : open.error,
+    error: `${MACOS_APP_DISPLAY_NAME}.app 重新打开失败:${errors.at(-1) ?? "未知错误"}`,
   };
 }
 
@@ -235,6 +227,23 @@ foreach ($id in $ids) {
     [void]$process.CloseMainWindow()
   }
 }
+`;
+
+  await execFileAsync("powershell.exe", [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-Command",
+    script,
+  ]);
+}
+
+async function forceStopWindowsCodexAppProcesses(): Promise<void> {
+  const script = `
+$ErrorActionPreference = 'Stop'
+Get-Process |
+  Where-Object { $_.ProcessName -ceq 'Codex' } |
+  Stop-Process -Force
 `;
 
   await execFileAsync("powershell.exe", [
